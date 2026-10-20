@@ -1,38 +1,36 @@
 # Avera backend
 
-The backend is fixture-ready in local mode and can use PostgreSQL plus Kafka/Redpanda when both are configured.
+FastAPI services for the simulated bank, incident event stream, Ghost Test, isolated route twin, and approval-gated demo controls.
+
+## Run
 
 ```bash
-cd backend
 python -m pip install -r requirements.txt
 PYTHONPATH=. uvicorn avera.api.app:app --reload
 ```
 
-Run the backend demo-readiness regression (ten complete seeded cycles) with:
+The API defaults to in-memory storage and event delivery. For durable mode, configure both `AVERA_DATABASE_URL` and `AVERA_KAFKA_BOOTSTRAP_SERVERS`. PostgreSQL stores the ordered stream; Kafka/Redpanda carries event notifications. For this single-bank demo, create `avera.stream.v1` with one partition.
+
+## Test
 
 ```bash
-cd backend
 python -m pip install -r requirements-dev.txt
 PYTHONPATH=. pytest -q
 ```
 
-Without environment configuration, the API uses in-memory storage and event notifications. To enable durable mode, set both `AVERA_DATABASE_URL` and `AVERA_KAFKA_BOOTSTRAP_SERVERS`. PostgreSQL assigns stream sequence numbers and stores the append-only replay log; Kafka/Redpanda carries canonical stream notifications and failed deliveries go to `avera.stream.dlq.v1`. Create `avera.stream.v1` with one partition for this single-bank demo. The API uses a stable bank key, while SSE always reads ordered rows from PostgreSQL, including after reconnects.
+The suite includes ten seeded incident cycles and checks that routing requires approval, the twin stays isolated, Ghost Test scores remain stable, and reset restores the baseline.
 
-Useful routes:
+## Main API
 
-- `POST /replay` loads the bundled synthetic incident fixture.
-- `POST /ingest/{source}` validates and stores one typed contract object.
-- Simulated bank events and complaints are queued into the same ingestion pipeline automatically.
-- `POST /hypotheses` runs deterministic suspect/control tests and streams their results.
-- `POST /ghost-test/rerun` verifies the current simulated route against the last tested hypothesis.
-- `POST /twin/simulate` compares a candidate route against the current route in detached simulator copies.
-- `POST /approvals` creates an in-platform pending request; `POST /approvals/{id}` records approve/reject decisions. `POST /admin/route` applies only a matching approved engineer config change to the simulated bank.
-- `GET /approvals` and `GET /approvals/{id}` back the in-platform approval queue and decision detail. External-platform connection buttons are UI hooks only in this module; no external credentials or actions are wired.
-- `POST /demo/start`, `/demo/inject`, and `/demo/reset` run the healthy baseline, thousands-event synthetic incident, and reset lifecycle.
-- `GET /stream` streams records; reconnect with `Last-Event-ID` or `?after=<sequence>`.
-- `GET /service-map` returns the simulated bank topology and current routes.
-- `GET /health` reports adapter mode and in-process delivery counters.
+- `POST /demo/start`, `/demo/inject`, `/demo/reset` — run the healthy baseline, inject the synthetic incident, or reset.
+- `POST /hypotheses`, `POST /ghost-test/rerun` — evaluate hypotheses and verify a simulated fix.
+- `POST /twin/simulate`, `POST /admin/route` — compare a candidate route in an isolated twin and apply a matching approved config to the simulated bank.
+- `POST /approvals`, `GET /approvals`, `POST /approvals/{id}` — create, list, and decide in-platform approval requests.
+- `GET /stream`, `GET /service-map`, `GET /health` — read ordered events, simulated topology, and service health.
+- `POST /ingest/{source}`, `POST /replay` — ingest typed events or replay the bundled incident fixture.
 
-The simulator and all fixture identifiers are synthetic. No real bank, customer, SMS, or payment system is contacted. SMS and code approval records are audit/demo objects only; this API does not dispatch messages or execute code.
+## Optional GPT summary
 
-Ghost Test scoring and route decisions remain deterministic. To add an optional GPT-generated summary of aggregate test measurements, set `OPENAI_API_KEY` and `AVERA_GHOST_SUMMARY_MODEL=gpt-5.4-mini`. The model receives only test type/count/score/verdict aggregates (no claims, customer identifiers, raw events, or tools); failures fall back to the local summary. The summary is descriptive only and does not change confidence, handoff, approvals, or routing.
+Ghost Test scoring and routing remain deterministic. To enable an optional model-generated summary, configure `OPENAI_API_KEY` and `AVERA_GHOST_SUMMARY_MODEL=gpt-5.4-mini`. The model receives only aggregate test measurements and has no tools or authority to alter results. If it is unavailable, the API returns a local summary instead.
+
+No real bank, customer, payment, SMS, or external approval platform is contacted by this MVP.
