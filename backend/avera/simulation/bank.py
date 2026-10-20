@@ -244,6 +244,16 @@ class SimulatedBank:
         if self._complaint_sink is not None:
             self._complaint_sink(complaint)
 
+    def set_event_sinks(
+        self,
+        *,
+        event_sink: Callable[[Event], None] | None,
+        complaint_sink: Callable[[Complaint], None] | None,
+    ) -> None:
+        """Connect simulator output to an ingestion pipeline without changing its state."""
+        self._event_sink = event_sink
+        self._complaint_sink = complaint_sink
+
     def transfer(
         self,
         *,

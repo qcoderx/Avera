@@ -6,6 +6,8 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 |---|---|---|---|
 | GET | `/stream` | Ordered SSE stream of contract objects | Incident Command Centre |
 | GET | `/service-map` | Services, dependencies, and routes in the simulated bank | Observability Agent, Incident Command Centre |
+| POST | `/ingest/{source}` | Validate, normalize, persist, and publish a typed source event | Bank/webhook adapters |
+| POST | `/replay` | Replay the recorded full-incident fixture into the current stream | Incident Command Centre |
 | POST | `/hypotheses` | Submit a hypothesis set for Ghost Test evaluation | Observability Agent |
 | POST | `/ghost-test/rerun` | Rerun original failing tests after a proposed fix | Resolution Agent |
 | POST | `/twin/simulate` | Simulate a route or configuration change in the isolated twin | Blast Radius Agent |
@@ -23,6 +25,11 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 - Approval decisions require both `approver` and `decided_at`; pending approvals have neither.
 - `ResolutionEvent` records what was prepared or applied. It never represents a transfer, reversal, or other movement of customer funds.
 - Contract payloads reject undeclared fields so accidental interface drift is visible during development.
+- PostgreSQL assigns the authoritative sequence; the stream repository deduplicates by `(type, object id, occurred_at)` so repeated incident lifecycle updates remain distinct while fixture replay is idempotent.
+- PostgreSQL append transactions take a stream-scoped advisory lock so allocated sequence order matches commit order for the single-bank demo.
+- Kafka/Redpanda is the live notification bus and DLQ; SSE reconnect/replay reads from PostgreSQL, so broker notifications never define client ordering.
+- In the single-bank demo, canonical Kafka records use a stable bank key. SSE reads persisted records in sequence order and tolerates duplicated or coalesced broker wake-ups.
+- Configure both `AVERA_DATABASE_URL` and `AVERA_KAFKA_BOOTSTRAP_SERVERS` for PostgreSQL/Kafka mode. With neither configured, the API uses in-memory adapters for local development.
 
 ## Fixture
 
