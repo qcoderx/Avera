@@ -30,6 +30,8 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 - Kafka/Redpanda is the live notification bus and DLQ; SSE reconnect/replay reads from PostgreSQL, so broker notifications never define client ordering.
 - In the single-bank demo, canonical Kafka records use a stable bank key. SSE reads persisted records in sequence order and tolerates duplicated or coalesced broker wake-ups.
 - Configure both `AVERA_DATABASE_URL` and `AVERA_KAFKA_BOOTSTRAP_SERVERS` for PostgreSQL/Kafka mode. With neither configured, the API uses in-memory adapters for local development.
+- `POST /hypotheses` emits a `Hypothesis` and its `TestResult` to `/stream`; confidence at or above `0.85` is eligible for handoff, otherwise `send_back_to_observability` is true.
+- `POST /ghost-test/rerun` uses the current simulated Bank X route in an isolated copy. It never mutates the live bank or moves real funds.
 
 ## Fixture
 

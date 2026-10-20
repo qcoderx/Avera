@@ -15,6 +15,8 @@ Useful routes:
 - `POST /replay` loads the bundled synthetic incident fixture.
 - `POST /ingest/{source}` validates and stores one typed contract object.
 - Simulated bank events and complaints are queued into the same ingestion pipeline automatically.
+- `POST /hypotheses` runs deterministic suspect/control tests and streams their results.
+- `POST /ghost-test/rerun` verifies the current simulated route against the last tested hypothesis.
 - `GET /stream` streams records; reconnect with `Last-Event-ID` or `?after=<sequence>`.
 - `GET /service-map` returns the simulated bank topology and current routes.
 - `GET /health` reports adapter mode and in-process delivery counters.

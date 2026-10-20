@@ -17,6 +17,15 @@ from avera.events.adapters import SimulationIngestionAdapter
 from avera.events.bus import EventBus, InMemoryEventBus, KafkaRedpandaEventBus
 from avera.events.repository import EventRepository, InMemoryEventRepository, PostgresEventRepository
 from avera.events.service import EventStreamService, IngestOutcome, ReplaySummary, encode_sse
+from avera.ghost_test import (
+    GhostTestAgent,
+    HypothesisEvaluationSet,
+    HypothesisSubmission,
+    RerunReceipt,
+    RerunNotReadyError,
+    RerunRequest,
+    UnknownHypothesisError,
+)
 from avera.simulation.bank import SimulatedBank
 
 
@@ -77,6 +86,7 @@ def create_app(
         event_sink=simulator_adapter.on_event,
         complaint_sink=simulator_adapter.on_complaint,
     )
+    ghost_test_agent = GhostTestAgent(simulated_bank, service)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -101,6 +111,7 @@ def create_app(
     app.state.event_bus = bus
     app.state.simulated_bank = simulated_bank
     app.state.simulator_ingestion = simulator_adapter
+    app.state.ghost_test_agent = ghost_test_agent
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -148,6 +159,20 @@ def create_app(
             first_sequence=summary.first_sequence,
             last_sequence=summary.last_sequence,
         )
+
+    @app.post("/hypotheses", response_model=HypothesisEvaluationSet, status_code=202)
+    async def submit_hypotheses(body: HypothesisSubmission) -> HypothesisEvaluationSet:
+        return await ghost_test_agent.evaluate(body)
+
+    @app.post("/ghost-test/rerun", response_model=RerunReceipt, status_code=202)
+    async def ghost_test_rerun(body: RerunRequest) -> RerunReceipt:
+        try:
+            return await ghost_test_agent.rerun(body)
+        except (UnknownHypothesisError, RerunNotReadyError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"No previous Ghost Test run is available for hypothesis {exc.args[0]!r}",
+            ) from exc
 
     @app.get("/stream")
     async def stream(

@@ -317,6 +317,7 @@ class SimulatedBank:
             route="ledger.debit",
             code="DEBIT_POSTED" if debited else "INSUFFICIENT_FUNDS",
             customer_token=customer_token,
+            latency_ms=44,
             payload={"transaction_id": transaction_id, "amount_ngn": str(amount)},
         )
         if not debited:
