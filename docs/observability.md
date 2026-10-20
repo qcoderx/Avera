@@ -6,6 +6,38 @@ It does not change shared schemas, Ghost Test scoring, remediation, or the UI.
 
 ## Run from the repository root (PowerShell)
 
+Use Python 3.11 or newer (the existing shared contracts require it). Create a
+local virtual environment if `.venv` does not exist. From the repository root:
+
+```powershell
+py -3.13 -m venv .venv
+./.venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt
+if (!(Test-Path backend/.env)) { Copy-Item backend/.env.example backend/.env }
+```
+
+Edit **your local `backend/.env`** and fill in `OPENAI_API_KEY` with an authorized
+key obtained through the team's private credential-sharing channel. The example
+already specifies the OpenAI endpoint and `gpt-5.4-mini` model. Keep the key out of
+Git and project documentation. Existing local `.env` files are preserved by the
+command above; add the example's non-secret settings to yours if needed.
+
+Then check setup and run the agent:
+
+```powershell
+$env:PYTHONPATH='backend'
+./.venv/Scripts/python.exe -m avera.observability.smoke
+./.venv/Scripts/python.exe -m pytest backend/tests/test_observability.py -q
+./.venv/Scripts/python.exe -m avera.observability.demo
+```
+
+Expected: the smoke test prints `API authentication and model access: PASSED`;
+the focused suite reports `14 passed`; the synthetic demo prints JSON with
+`state: "tested"`, at least three competing candidates, and Ghost Test verdicts.
+The release candidate is tested by Ghost Test. Model/API failures are reported
+explicitly rather than replaced with canned hypotheses.
+
+To serve the agent through the existing backend instead:
+
 ```powershell
 ./.venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt
 ./.venv/Scripts/python.exe -m uvicorn avera.api.app:app --app-dir backend --env-file backend/.env --reload
