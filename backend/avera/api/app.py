@@ -12,7 +12,17 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from avera.contracts import ContractObjectType
+from avera.contracts import Approval, ApprovalStatus, ContractObjectType
+from avera.control import (
+    ApprovalCreateRequest,
+    ApprovalDecisionRequest,
+    ControlPlane,
+    DemoInjectRequest,
+    RouteApplyReceipt,
+    RouteApplyRequest,
+    TwinSimulationReceipt,
+    TwinSimulationRequest,
+)
 from avera.events.adapters import SimulationIngestionAdapter
 from avera.events.bus import EventBus, InMemoryEventBus, KafkaRedpandaEventBus
 from avera.events.repository import EventRepository, InMemoryEventRepository, PostgresEventRepository
@@ -112,6 +122,13 @@ def create_app(
     app.state.simulated_bank = simulated_bank
     app.state.simulator_ingestion = simulator_adapter
     app.state.ghost_test_agent = ghost_test_agent
+    control_plane = ControlPlane(
+        simulated_bank,
+        service,
+        ghost_test_agent,
+        simulator_adapter.flush,
+    )
+    app.state.control_plane = control_plane
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -173,6 +190,61 @@ def create_app(
                 status_code=409,
                 detail=f"No previous Ghost Test run is available for hypothesis {exc.args[0]!r}",
             ) from exc
+
+    @app.post("/twin/simulate", response_model=TwinSimulationReceipt)
+    async def twin_simulate(body: TwinSimulationRequest) -> TwinSimulationReceipt:
+        return control_plane.twin.simulate(body)
+
+    @app.post("/approvals", response_model=Approval, status_code=201)
+    async def create_approval(body: ApprovalCreateRequest) -> Approval:
+        return await control_plane.create_approval(body)
+
+    @app.get("/approvals", response_model=list[Approval])
+    async def list_approvals(status: ApprovalStatus | None = Query(default=None)) -> list[Approval]:
+        approvals = list(control_plane.approvals.values())
+        if status is not None:
+            approvals = [approval for approval in approvals if approval.status == status]
+        return approvals
+
+    @app.get("/approvals/{approval_id}", response_model=Approval)
+    async def get_approval(approval_id: str) -> Approval:
+        approval = control_plane.approvals.get(approval_id)
+        if approval is None:
+            raise HTTPException(status_code=404, detail=f"unknown approval: {approval_id}")
+        return approval
+
+    @app.post("/approvals/{approval_id}", response_model=Approval)
+    async def decide_approval(approval_id: str, body: ApprovalDecisionRequest) -> Approval:
+        try:
+            return await control_plane.decide_approval(approval_id, body)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"unknown approval: {approval_id}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/admin/route", response_model=RouteApplyReceipt)
+    async def admin_route(body: RouteApplyRequest) -> RouteApplyReceipt:
+        try:
+            return await control_plane.apply_route(body.approval_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"unknown approval: {body.approval_id}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/demo/start")
+    async def demo_start() -> dict[str, object]:
+        return await control_plane.start_demo()
+
+    @app.post("/demo/inject")
+    async def demo_inject(body: DemoInjectRequest | None = None) -> dict[str, object]:
+        try:
+            return await control_plane.inject_demo(body or DemoInjectRequest())
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/demo/reset")
+    async def demo_reset() -> dict[str, object]:
+        return await control_plane.reset_demo()
 
     @app.get("/stream")
     async def stream(

@@ -85,6 +85,13 @@ class GhostTestAgent:
         self._original_results: dict[str, TestResult] = {}
         self._release_seen = False
 
+    async def reset(self) -> None:
+        """Discard demo-specific hypothesis state while preserving unique run IDs."""
+        async with self._lock:
+            self._hypotheses.clear()
+            self._original_results.clear()
+            self._release_seen = False
+
     async def evaluate(self, submission: HypothesisSubmission) -> HypothesisEvaluationSet:
         async with self._lock:
             self._run_number += 1

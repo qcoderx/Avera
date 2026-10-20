@@ -17,8 +17,12 @@ Useful routes:
 - Simulated bank events and complaints are queued into the same ingestion pipeline automatically.
 - `POST /hypotheses` runs deterministic suspect/control tests and streams their results.
 - `POST /ghost-test/rerun` verifies the current simulated route against the last tested hypothesis.
+- `POST /twin/simulate` compares a candidate route against the current route in detached simulator copies.
+- `POST /approvals` creates an in-platform pending request; `POST /approvals/{id}` records approve/reject decisions. `POST /admin/route` applies only a matching approved engineer config change to the simulated bank.
+- `GET /approvals` and `GET /approvals/{id}` back the in-platform approval queue and decision detail. External-platform connection buttons are UI hooks only in this module; no external credentials or actions are wired.
+- `POST /demo/start`, `/demo/inject`, and `/demo/reset` run the healthy baseline, thousands-event synthetic incident, and reset lifecycle.
 - `GET /stream` streams records; reconnect with `Last-Event-ID` or `?after=<sequence>`.
 - `GET /service-map` returns the simulated bank topology and current routes.
 - `GET /health` reports adapter mode and in-process delivery counters.
 
-The simulator and all fixture identifiers are synthetic. No real bank, customer, SMS, or payment system is contacted.
+The simulator and all fixture identifiers are synthetic. No real bank, customer, SMS, or payment system is contacted. SMS and code approval records are audit/demo objects only; this API does not dispatch messages or execute code.

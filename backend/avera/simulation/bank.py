@@ -86,7 +86,13 @@ class SimulationClock:
         self._current += timedelta(milliseconds=1)
         return current
 
-    def reset(self) -> None:
+    def reset(self, start_at: datetime | None = None) -> None:
+        if start_at is not None:
+            if start_at.tzinfo is None or start_at.utcoffset() is None:
+                raise ValueError("simulation clock start_at must include a timezone")
+            # A reset starts a fresh simulator epoch without moving event time
+            # backwards, which keeps replay keys unique across demo resets.
+            self._initial = max(start_at.astimezone(timezone.utc), self._current)
         self._current = self._initial
 
 
@@ -456,8 +462,8 @@ class SimulatedBank:
             "routes": dict(self.payment_router.routes),
         }
 
-    def reset(self) -> None:
-        self.clock.reset()
+    def reset(self, *, start_at: datetime | None = None) -> None:
+        self.clock.reset(start_at)
         self.core_banking.reset()
         self.payment_router.reset()
         for destination in self.destination_banks.values():

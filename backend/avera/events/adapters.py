@@ -45,6 +45,10 @@ class SimulationIngestionAdapter:
         self._worker = None
         self._loop = None
 
+    async def flush(self) -> None:
+        """Wait until every simulator callback queued so far is ingested."""
+        await self._queue.join()
+
     def _enqueue(self, kind: ContractObjectType, payload: dict[str, Any]) -> None:
         item = (kind, payload)
         loop = self._loop

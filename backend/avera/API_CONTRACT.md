@@ -15,6 +15,9 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 | POST | `/demo/start` | Start or replay the demo | Incident Command Centre |
 | POST | `/demo/inject` | Inject the deterministic failure and decoy | Incident Command Centre |
 | POST | `/demo/reset` | Reset the simulated bank to its known baseline | Incident Command Centre |
+| POST | `/approvals` | Create an in-platform pending approval request | Resolution Agent |
+| GET | `/approvals` | List in-platform approvals, optionally filtered by status | Incident Command Centre |
+| GET | `/approvals/{id}` | Read one approval and its decision state | Incident Command Centre |
 | POST | `/approvals/{id}` | Record approval or rejection of an SMS, config, or code action | Incident Command Centre |
 
 ## Shared wire rules
@@ -32,6 +35,12 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 - Configure both `AVERA_DATABASE_URL` and `AVERA_KAFKA_BOOTSTRAP_SERVERS` for PostgreSQL/Kafka mode. With neither configured, the API uses in-memory adapters for local development.
 - `POST /hypotheses` emits a `Hypothesis` and its `TestResult` to `/stream`; confidence at or above `0.85` is eligible for handoff, otherwise `send_back_to_observability` is true.
 - `POST /ghost-test/rerun` uses the current simulated Bank X route in an isolated copy. It never mutates the live bank or moves real funds.
+- `POST /twin/simulate` compares the current route with a candidate route using detached simulator copies; it never changes the live route.
+- Approval flow is two-step: `POST /approvals` creates a pending record, then `POST /approvals/{id}` records an in-platform decision. Only an approved engineer-level `config` request with a matching `action=reroute`, `destination_bank`, and `to_gateway` can be applied by `POST /admin/route`.
+- `POST /admin/route` accepts only the approval ID, emits route and resolution records, and changes only the simulated bank. SMS/code approvals are recorded for review but are not executed by this demo API.
+- Existing-platform connection buttons are integration entry points for the UI; this backend records decisions internally and does not yet authenticate to, send to, or execute actions in external platforms.
+- `POST /demo/start` and `/demo/reset` generate a 30-transfer healthy baseline. `/demo/inject` generates the default 1,284-transfer Bank X incident (thousands of streamed synthetic events) and is idempotent until the next reset. Counts can be adjusted within request bounds for smaller tests.
+- Reset advances the simulator event-time epoch so repeated demo runs retain unique stream deduplication keys.
 
 ## Fixture
 

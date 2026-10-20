@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from avera.contracts import Event
 from avera.simulation.bank import SimulatedBank
@@ -75,6 +76,6 @@ class FailureInjector:
         )
         return self._result
 
-    def reset(self) -> None:
-        self.bank.reset()
+    def reset(self, *, start_at: datetime | None = None) -> None:
+        self.bank.reset(start_at=start_at)
         self._result = None
