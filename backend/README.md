@@ -8,6 +8,14 @@ python -m pip install -r requirements.txt
 PYTHONPATH=. uvicorn avera.api.app:app --reload
 ```
 
+Run the backend demo-readiness regression (ten complete seeded cycles) with:
+
+```bash
+cd backend
+python -m pip install -r requirements-dev.txt
+PYTHONPATH=. pytest -q
+```
+
 Without environment configuration, the API uses in-memory storage and event notifications. To enable durable mode, set both `AVERA_DATABASE_URL` and `AVERA_KAFKA_BOOTSTRAP_SERVERS`. PostgreSQL assigns stream sequence numbers and stores the append-only replay log; Kafka/Redpanda carries canonical stream notifications and failed deliveries go to `avera.stream.dlq.v1`. Create `avera.stream.v1` with one partition for this single-bank demo. The API uses a stable bank key, while SSE always reads ordered rows from PostgreSQL, including after reconnects.
 
 Useful routes:
