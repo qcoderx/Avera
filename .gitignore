@@ -17,6 +17,7 @@ output/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+private/
 
 # Environment and local configuration
 .env
