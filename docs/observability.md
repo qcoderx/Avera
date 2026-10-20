@@ -194,3 +194,10 @@ events, unknown outcomes, amount and identity checks, valid shared outputs and
 references, malformed model output, timeout/API failures, bounded escalation,
 evidence-only fixture replay and reset. Model access is verified separately by
 the real smoke test; the small synthetic integration can also use the real model.
+
+## Agent flow
+
+The diagram shows how observed events and complaint reports become evidence, competing hypotheses, a preliminary rank, and an integrated Ghost Test handoff. The model interprets complaints and proposes explanations; Python validates evidence references and calculates the rank.
+
+![Avera Observability Agent flow](images/observability-agent-flow.png)
+
