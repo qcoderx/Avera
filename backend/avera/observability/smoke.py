@@ -5,14 +5,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from .model import configured_model_name
+from .model import configured_model_name, configured_base_url
 
 
 async def main():
     load_dotenv(Path(__file__).resolve().parents[2] / ".env")
     try:
         async with AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"],
-                               base_url=os.getenv("OPENAI_BASE_URL"), timeout=15, max_retries=0) as client:
+                               base_url=configured_base_url(), timeout=15, max_retries=0) as client:
             result = await client.responses.create(model=configured_model_name(),
                 input="Reply OK.", max_output_tokens=32, store=False)
             passed = bool(result.output_text.strip())

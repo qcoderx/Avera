@@ -43,13 +43,18 @@ def configured_model_name():
     return os.getenv("AVERA_OBSERVABILITY_MODEL") or os.getenv("AVERA_GHOST_SUMMARY_MODEL")
 
 
+def configured_base_url():
+    # An empty optional dotenv value must not turn SDK requests into relative URLs.
+    return os.getenv("OPENAI_BASE_URL", "").strip() or "https://api.openai.com/v1"
+
+
 def configured_model():
     # OpenAI is established by the existing project configuration, not key syntax.
     model = configured_model_name()
     key = os.getenv("OPENAI_API_KEY")
     if not model or not key:
         return None
-    return OpenAIObservabilityModel(model, api_key=key, base_url=os.getenv("OPENAI_BASE_URL"))
+    return OpenAIObservabilityModel(model, api_key=key, base_url=configured_base_url())
 
 
 async def structured_call(model, instructions, context, schema, validate=lambda value: value):
@@ -67,6 +72,12 @@ async def structured_call(model, instructions, context, schema, validate=lambda 
             if type(exc).__name__ == "CandidateValidationError":
                 request_context["previous_output_error"] = str(exc)
                 request_context["correction"] = "Use only exact strings from evidence_ids as references; no transaction IDs, prefixes or invented labels. Each candidate needs at least one supporting reference. Correct the previous validation error."
+                if str(exc) == "insufficient_competing_candidates":
+                    request_context["correction"] = "Return at least three candidates spanning at least three distinct allowed_zones with real supporting references. Include the release as one candidate when observed. Duplicate-zone candidates do not count as distinct zones. State uncertainty and contrary observations for weaker candidates; do not invent evidence."
+                elif str(exc) == "invalid_component_or_resolver":
+                    request_context["correction"] = "For each zone, routed_to must exactly match that zone's routed_to list in allowed_zones. Do not borrow another component's resolver tags."
+                elif str(exc) == "missing_component_support":
+                    request_context["correction"] = "Each candidate's evidence_for needs a supplied observation of its component. Release candidates need a release/deployment reference; partner candidates can cite observations explicitly naming their destination."
             if attempt:
                 # Safe diagnostics: no exception text, request body, headers or key.
                 status = getattr(exc, "status_code", None)

@@ -221,6 +221,14 @@ def test_shared_model_configuration_uses_one_key(monkeypatch):
     assert configured_model_name() == "explicit-task-model"
 
 
+def test_empty_optional_endpoint_uses_existing_openai_default(monkeypatch):
+    from avera.observability.model import configured_base_url
+    monkeypatch.setenv("OPENAI_BASE_URL", "")
+    assert configured_base_url() == "https://api.openai.com/v1"
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://configured.example/v1")
+    assert configured_base_url() == "https://configured.example/v1"
+
+
 def test_hidden_payload_labels_are_removed_before_reasoning():
     item = event(payload={"transaction_id": "observed-txn", "decoy": True,
         "fault": "hidden cause", "expected_hypotheses": ["hidden answer"],
@@ -241,3 +249,111 @@ def test_model_missing_is_degraded_and_repeated_run_is_cached():
         again = client.post("/observability/investigate").json()
         assert again == first
         assert client.get("/health").json()["metrics"]["duplicates"] == 0
+
+
+async def seeded_agent(model, ghost_factory, *, healthy=False):
+    from avera.simulation.traffic import TrafficGenerator
+    from avera.simulation.failures import FailureInjector
+    bank = SimulatedBank()
+    stream = EventStreamService(InMemoryEventRepository(), InMemoryEventBus())
+    ghost = ghost_factory(bank, stream)
+    agent = ObservabilityAgent(stream, ghost, bank.service_map, model)
+    stream.observation_handlers.append(agent.observe)
+    traffic = TrafficGenerator(bank)
+    traffic.generate_healthy_baseline()
+    if not healthy:
+        FailureInjector(bank).inject()
+        traffic.generate_incident_traffic(transactions=24, customers=16, complaint_count=1,
+            retry_customers=3, history_refresh_customers=4, channel_switch_customers=2)
+    for item in sorted([*bank.events, *bank.complaints], key=lambda x: (x.ts, x.id)):
+        await stream.ingest("event" if isinstance(item, Event) else "complaint", item.model_dump(mode="json"))
+    return agent
+
+
+def test_observability_only_never_executes_ghost_and_reset_clears_prepared_state():
+    class ForbiddenGhost:
+        calls = 0
+        async def evaluate(self, _):
+            self.calls += 1
+            raise AssertionError("Ghost Test must not run")
+    ghost = ForbiddenGhost()
+    model = ScriptedModel()
+    async def scenario():
+        agent = await seeded_agent(model, lambda *_: ghost)
+        result = await agent.run(handoff=False)
+        assert result["state"] == "hypotheses_ready" and result["feedback"] is None
+        assert ghost.calls == 0 and result["complaints"][0]["parsed"] is not None
+        Incident.model_validate(result["incident"])
+        assert len({h["zone"] for h in result["hypotheses"]}) >= 3
+        assert any(h["zone"] == "mobile_app.release" for h in result["hypotheses"])
+        assert all(set(h["evidence_for"] + h["evidence_against"]) <= set(result["incident"]["signals"]) for h in result["hypotheses"])
+        calls = len(model.calls)
+        assert await agent.run(handoff=False) == result
+        assert len(model.calls) == calls and ghost.calls == 0
+        records = await agent.stream.records_after(0)
+        assert not any(r.type.value == "test_result" for r in records)
+        agent.reset()
+        assert agent._prepared is None and agent.snapshot()["incident"] is None
+    asyncio.run(scenario())
+
+
+def test_observability_only_healthy_without_ghost_or_model_calls():
+    async def scenario():
+        model = ScriptedModel()
+        agent = await seeded_agent(model, lambda *_: None, healthy=True)
+        result = await agent.run(handoff=False)
+        assert result["state"] == "healthy"
+        assert result["incident"] is None and result["hypotheses"] == [] and result["feedback"] is None
+        assert not model.calls
+    asyncio.run(scenario())
+
+
+def test_prepared_hypotheses_can_be_handed_off_without_repeating_llm():
+    async def scenario():
+        model = ScriptedModel()
+        agent = await seeded_agent(model, GhostTestAgent)
+        ready = await agent.run(handoff=False)
+        calls = len(model.calls)
+        tested = await agent.run()
+        assert tested["state"] == "tested"
+        assert tested["hypotheses"] == ready["hypotheses"] and len(model.calls) == calls
+        assert tested["feedback"] is not None
+    asyncio.run(scenario())
+
+
+def test_observability_only_cli_saves_full_evidence_without_constructing_ghost(monkeypatch, tmp_path):
+    from avera.observability import demo
+    class Model(ScriptedModel):
+        async def close(self):
+            pass
+    def forbidden(*_):
+        raise AssertionError("standalone CLI must not construct Ghost Test")
+    monkeypatch.setattr(demo, "configured_model", lambda: Model())
+    monkeypatch.setattr(demo, "load_dotenv", lambda _: None)
+    monkeypatch.setattr(demo, "GhostTestAgent", forbidden)
+    output = tmp_path / "fault.json"
+    assert asyncio.run(demo.main(["--observability-only", "--output", str(output)])) == 0
+    report = json.loads(output.read_text())
+    assert report["mode"] == "observability_only" and report["ghost_test_executed"] is False
+    assert report["source_observations"] and report["result"]["state"] == "hypotheses_ready"
+    assert all("fault" not in v.get("payload", {}) and "decoy" not in v.get("payload", {}) for v in report["source_observations"])
+
+
+def test_too_few_competing_zones_gets_one_explicit_model_correction():
+    class TwoZonesFirst(ScriptedModel):
+        rounds = 0
+        async def generate(self, instructions, context, schema):
+            result = await super().generate(instructions, context, schema)
+            if issubclass(schema, Candidates):
+                self.rounds += 1
+                if self.rounds == 1:
+                    result.hypotheses = [h for h in result.hypotheses if h.zone in {"gateway_b", "mobile_app.release"}]
+            return result
+    async def scenario():
+        model = TwoZonesFirst()
+        agent = await seeded_agent(model, lambda *_: None)
+        result = await agent.run(handoff=False)
+        assert result["state"] == "hypotheses_ready" and model.rounds == 2
+        assert model.calls[-1]["previous_output_error"] == "insufficient_competing_candidates"
+        assert "three distinct" in model.calls[-1]["correction"]
+    asyncio.run(scenario())

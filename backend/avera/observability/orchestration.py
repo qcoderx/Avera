@@ -42,6 +42,7 @@ class ObservabilityAgent:
         self.duplicates = 0
         self.late = 0
         self.parsed = {}
+        self._prepared = None
         self.generation = getattr(self, "generation", 0) + 1
 
     def observe(self, kind, data):
@@ -73,10 +74,14 @@ class ObservabilityAgent:
                 "complaints": [c.model_dump(mode="json") for c in self.parsed.values()],
                 "feedback": self.feedback.model_dump(mode="json") if self.feedback else None}
 
-    async def run(self, *, until: datetime | None = None):
+    async def run(self, *, until: datetime | None = None, handoff: bool = True):
         async with self._lock:
             if self.state in {"tested", "tested_degraded", "escalated", "degraded", "error"}:
                 return self.snapshot()
+            if self.state in {"hypotheses_ready", "hypotheses_ready_degraded"}:
+                if not handoff:
+                    return self.snapshot()
+                return await self._complete(*self._prepared, handoff=True, reuse=True)
             cutoff = until or self.watermark
             if cutoff is None:
                 return self.snapshot()
@@ -143,41 +148,51 @@ class ObservabilityAgent:
                 "behaviour_counts": dict(Counter(v["kind"] for v in self.incident.fingerprint["behaviours"]))}
             supplied = {e.id for e in representatives.values()} | {v.id for v in items if isinstance(v, Complaint)}
             context["evidence_ids"] = sorted(supplied)
-            for revision in range(self.max_revisions + 1):
-                self.revisions = revision
-                try:
+            self._prepared = (context, supplied, zones)
+            return await self._complete(context, supplied, zones, handoff=handoff)
+
+    async def _complete(self, context, supplied, zones, *, handoff, reuse=False):
+        """Stop at ranked hypotheses when requested; preserve integrated feedback handling."""
+        for revision in range(self.max_revisions + 1):
+            self.revisions = revision
+            try:
+                if not (reuse and revision == 0):
                     self.hypotheses = await investigate(self.model, context, supplied, zones)
-                except ModelUnavailable as exc:
-                    self.state = "degraded"
-                    self.errors = sorted(set(self.errors + [str(exc)]))
-                    return self.snapshot()
-                # Namespace model IDs so previous demos/rounds cannot collide in ingestion.
+            except ModelUnavailable as exc:
+                self.state = "degraded"
+                self.errors = sorted(set(self.errors + [str(exc)]))
+                return self.snapshot()
+            # Namespace model IDs so previous demos/rounds cannot collide in ingestion.
+            if not (reuse and revision == 0):
                 self.hypotheses = [h.model_copy(update={"id": f"{self.incident.id}-r{revision}-{i}"})
                                    for i, h in enumerate(self.hypotheses, 1)]
-                try:
-                    self.feedback = await self.ghost.evaluate(HypothesisSubmission(hypotheses=self.hypotheses))
-                    self.feedback = HypothesisEvaluationSet.model_validate(self.feedback.model_dump())
-                except Exception:
-                    self.state = "error"
-                    self.errors.append("ghost_handoff_failed")
-                    return self.snapshot()
-                submitted = {h.id for h in self.hypotheses}
-                submitted_objects = {h.id: h for h in self.hypotheses}
-                returned = [v.hypothesis.id for v in self.feedback.evaluations]
-                if (len(returned) != len(submitted) or set(returned) != submitted
-                    or any(v.test_result.hypothesis_id != v.hypothesis.id for v in self.feedback.evaluations)
-                    or any(v.hypothesis != submitted_objects[v.hypothesis.id] for v in self.feedback.evaluations if v.hypothesis.id in submitted)
-                    or not set(self.feedback.validated_hypothesis_ids) <= submitted):
-                    self.state = "error"
-                    self.errors.append("ghost_feedback_identity_mismatch")
-                    return self.snapshot()
-                if not self.feedback.send_back_to_observability:
-                    self.state = "tested_degraded" if self.errors else "tested"
-                    return self.snapshot()
-                context["feedback"] = self.feedback.model_dump(mode="json")
-                supplied.update(v.test_result.id for v in self.feedback.evaluations)
-                context["evidence_ids"] = sorted(supplied)
-                context["previous_candidates"] = [h.model_dump(mode="json") for h in self.hypotheses]
-            self.state = "escalated"
-            self.errors.append("evidence_insufficient_after_bounded_revisions")
-            return self.snapshot()
+            if not handoff:
+                self.state = "hypotheses_ready_degraded" if self.errors else "hypotheses_ready"
+                return self.snapshot()
+            try:
+                self.feedback = await self.ghost.evaluate(HypothesisSubmission(hypotheses=self.hypotheses))
+                self.feedback = HypothesisEvaluationSet.model_validate(self.feedback.model_dump())
+            except Exception:
+                self.state = "error"
+                self.errors.append("ghost_handoff_failed")
+                return self.snapshot()
+            submitted = {h.id for h in self.hypotheses}
+            submitted_objects = {h.id: h for h in self.hypotheses}
+            returned = [v.hypothesis.id for v in self.feedback.evaluations]
+            if (len(returned) != len(submitted) or set(returned) != submitted
+                or any(v.test_result.hypothesis_id != v.hypothesis.id for v in self.feedback.evaluations)
+                or any(v.hypothesis != submitted_objects[v.hypothesis.id] for v in self.feedback.evaluations if v.hypothesis.id in submitted)
+                or not set(self.feedback.validated_hypothesis_ids) <= submitted):
+                self.state = "error"
+                self.errors.append("ghost_feedback_identity_mismatch")
+                return self.snapshot()
+            if not self.feedback.send_back_to_observability:
+                self.state = "tested_degraded" if self.errors else "tested"
+                return self.snapshot()
+            context["feedback"] = self.feedback.model_dump(mode="json")
+            supplied.update(v.test_result.id for v in self.feedback.evaluations)
+            context["evidence_ids"] = sorted(supplied)
+            context["previous_candidates"] = [h.model_dump(mode="json") for h in self.hypotheses]
+        self.state = "escalated"
+        self.errors.append("evidence_insufficient_after_bounded_revisions")
+        return self.snapshot()

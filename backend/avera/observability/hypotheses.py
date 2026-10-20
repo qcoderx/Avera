@@ -1,7 +1,8 @@
 """Validate language candidates against real evidence and allowed resolver ownership."""
-from pydantic import Field
+from typing import Literal
+from pydantic import Field, create_model
 from avera.contracts import ContractModel, Hypothesis
-from .model import structured_call
+from .model import ModelUnavailable, structured_call
 from .prompts import INVESTIGATOR
 from .ranking import rank
 
@@ -15,6 +16,20 @@ class Candidates(ContractModel):
 
 
 async def investigate(model, context, evidence, zones):
+    if not evidence or not zones:
+        raise ModelUnavailable("no_supported_components_or_evidence")
+    # Narrow existing contracts per investigation. The model cannot invent zone,
+    # resolver or evidence identifiers; shared output fields remain unchanged.
+    references = Literal[tuple(sorted(evidence))]
+    zone_names = Literal[tuple(sorted(zones))]
+    tags = Literal[tuple(sorted({tag for config in zones.values() for tag in config["routed_to"]}))]
+    bound_hypothesis = create_model("EvidenceBoundHypothesis", __base__=Hypothesis,
+        zone=(zone_names, ...),
+        evidence_for=(list[references], Field(min_length=1)),
+        evidence_against=(list[references], Field(default_factory=list)),
+        routed_to=(list[tags], Field(min_length=1)))
+    bound_candidates = create_model("EvidenceBoundCandidates", __base__=Candidates,
+        hypotheses=(list[bound_hypothesis], Field(min_length=1, max_length=10)))
     def validate(result):
         ids = set()
         signatures = set()
@@ -52,5 +67,5 @@ async def investigate(model, context, evidence, zones):
                     if v["test_result"]["verdict"] == "rejected"}
         if signatures & rejected:
             raise CandidateValidationError("unchanged_rejected_candidate")
-        return rank(result.hypotheses)
-    return await structured_call(model, INVESTIGATOR, context, Candidates, validate)
+        return rank([Hypothesis.model_validate(h.model_dump()) for h in result.hypotheses])
+    return await structured_call(model, INVESTIGATOR, context, bound_candidates, validate)

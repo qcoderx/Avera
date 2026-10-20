@@ -27,14 +27,30 @@ Then check setup and run the agent:
 $env:PYTHONPATH='backend'
 ./.venv/Scripts/python.exe -m avera.observability.smoke
 ./.venv/Scripts/python.exe -m pytest backend/tests/test_observability.py -q
-./.venv/Scripts/python.exe -m avera.observability.demo
+./.venv/Scripts/python.exe -m avera.observability.demo --observability-only --healthy --output output/observability-verification/healthy.json
+./.venv/Scripts/python.exe -m avera.observability.demo --observability-only --output output/observability-verification/fault.json
 ```
 
 Expected: the smoke test prints `API authentication and model access: PASSED`;
-the focused suite reports `14 passed`; the synthetic demo prints JSON with
-`state: "tested"`, at least three competing candidates, and Ghost Test verdicts.
-The release candidate is tested by Ghost Test. Model/API failures are reported
+the focused suite reports `20 passed`; healthy activity reports `healthy` with no
+incident; the fault run reports `hypotheses_ready`, at least three competing zones,
+and `ghost_test_executed: false`. Full Incident, parsed complaints, ranked
+Hypotheses, and sanitized source observations are saved in the two JSON files.
+The release remains a candidate without receiving a test verdict. Model/API failures are reported
 explicitly rather than replaced with canned hypotheses.
+
+`--observability-only` does not construct a Ghost Test agent. The Python equivalent
+is `await agent.run(handoff=False)`. Without that flag, the original integrated
+demo/handoff remains available. A later `await agent.run()` can hand off an already
+prepared set without repeating LLM generation. Reset clears the prepared set.
+
+To inspect the actual ranked hypotheses in PowerShell:
+
+```powershell
+$report = Get-Content output/observability-verification/fault.json -Raw | ConvertFrom-Json
+$report.result.hypotheses | Format-List prior_rank,zone,claim,evidence_for,evidence_against,disproof,routed_to
+$report.result.incident | ConvertTo-Json -Depth 20
+```
 
 To serve the agent through the existing backend instead:
 
@@ -110,7 +126,10 @@ Resolver tags follow the work-split vocabulary and are checked against a local
 registry; shared contracts currently have no resolver enumeration.
 
 Versioned prompts live in `avera/observability/prompts.py`, matching the existing
-Python prompt style in `avera.llm`. Model candidates require exact supplied
+Python prompt style in `avera.llm` (current version `observability.v1.1`). The
+request schema inherits the shared Hypothesis contract and constrains evidence
+IDs, zones and team tags to the supplied values through enums; the returned
+objects are validated back into the unchanged shared contract. Model candidates require exact supplied
 evidence IDs, component evidence, valid zone/resolver tags, concrete claims and
 falsification conditions. When enough components are observed, at least three
 distinct zones are required, including the simultaneous release. Python assigns
