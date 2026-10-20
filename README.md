@@ -12,7 +12,9 @@ External operational and customer signals enter through an API gateway and Kafka
 
 The current implementation is a single-bank simulation, not a live banking integration. It includes a simulated bank and incident traffic, an ordered event API and SSE stream, deterministic Ghost Tests, an isolated route twin, in-platform approval records, and simulated route changes. PostgreSQL and Kafka/Redpanda adapters are available when configured; local development defaults to in-memory adapters.
 
-Ghost Test can optionally use GPT-5.4 Mini to summarize aggregate test results. The model does not choose the verdict, score hypotheses, approve actions, or change routes. Other agents and external source/platform connections shown in the design remain integration work.
+Shaz's Observability Agent now parses reported complaint facts, detects behavioural signals and incident changes, maps suspect components, generates competing hypotheses, and hands validated candidates to the existing Ghost Test workflow. See [setup, run commands, evidence boundaries, and fixture limitations](docs/observability.md).
+
+Ghost Test can optionally use GPT-5.4 Mini to summarize aggregate test results. The model does not choose the verdict, score hypotheses, approve actions, or change routes. External source/platform connections shown in the design remain integration work.
 
 ## Run locally
 

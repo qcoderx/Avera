@@ -6,6 +6,7 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
@@ -38,6 +39,9 @@ from avera.ghost_test import (
 )
 from avera.llm import GhostSummaryProvider, configured_test_summary_provider
 from avera.simulation.bank import SimulatedBank
+from avera.observability.model import configured_model
+from avera.observability.orchestration import ObservabilityAgent
+from avera.observability.replay import replay_observations
 
 
 class IngestRequest(BaseModel):
@@ -84,6 +88,7 @@ def create_app(
     bus: EventBus | None = None,
     bank: SimulatedBank | None = None,
     test_summary_provider: GhostSummaryProvider | None = None,
+    observability_model=None,
 ) -> FastAPI:
     if repository is None and bus is None:
         repository, bus = _runtime_adapters()
@@ -104,6 +109,9 @@ def create_app(
         else configured_test_summary_provider()
     )
     ghost_test_agent = GhostTestAgent(simulated_bank, service, summary_provider)
+    language_model = observability_model if observability_model is not None else configured_model()
+    observability = ObservabilityAgent(service, ghost_test_agent, simulated_bank.service_map, language_model)
+    service.observation_handlers.append(observability.observe)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -113,7 +121,13 @@ def create_app(
             await simulator_adapter.start()
             yield
         finally:
+            task = getattr(app.state, "observability_task", None)
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
             await simulator_adapter.close()
+            if language_model is not None and hasattr(language_model, "close"):
+                await language_model.close()
             if summary_provider is not None and hasattr(summary_provider, "close"):
                 await summary_provider.close()
             await bus.close()
@@ -132,6 +146,21 @@ def create_app(
     app.state.simulator_ingestion = simulator_adapter
     app.state.ghost_test_agent = ghost_test_agent
     app.state.ghost_test_summary_provider = summary_provider
+    app.state.observability_agent = observability
+    app.state.observability_task = None
+
+    def schedule_investigation():
+        task = app.state.observability_task
+        if task is None or task.done():
+            app.state.observability_task = asyncio.create_task(observability.run())
+
+    async def stop_investigation():
+        task = app.state.observability_task
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        app.state.observability_task = None
+
     control_plane = ControlPlane(
         simulated_bank,
         service,
@@ -144,6 +173,8 @@ def create_app(
     async def health() -> dict[str, Any]:
         return {
             "status": "ok",
+            "observability": {"state": observability.state, "model_configured": language_model is not None,
+                              "errors": observability.errors},
             "storage": "postgresql" if isinstance(repository, PostgresEventRepository) else "memory",
             "event_bus": "kafka" if isinstance(bus, KafkaRedpandaEventBus) else "memory",
             "simulator_queue_depth": simulator_adapter._queue.qsize(),
@@ -175,6 +206,8 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         response.headers["X-Avera-Sequence"] = str(outcome.record.sequence)
         response.headers["X-Avera-Delivery"] = outcome.delivery
+        if body.type in {ContractObjectType.EVENT, ContractObjectType.COMPLAINT}:
+            schedule_investigation()
         return IngestReceipt(
             record=outcome.record.model_dump(mode="json"),
             created=outcome.created,
@@ -195,6 +228,27 @@ def create_app(
     @app.post("/hypotheses", response_model=HypothesisEvaluationSet, status_code=202)
     async def submit_hypotheses(body: HypothesisSubmission) -> HypothesisEvaluationSet:
         return await ghost_test_agent.evaluate(body)
+
+    @app.get("/observability")
+    async def observability_status():
+        return observability.snapshot()
+
+    @app.post("/observability/investigate")
+    async def observability_investigate():
+        await simulator_adapter.flush()
+        return await observability.run()
+
+    @app.post("/observability/replay")
+    async def observability_replay(until: datetime):
+        if until.tzinfo is None:
+            raise HTTPException(status_code=422, detail="until requires an explicit UTC offset")
+        path = Path(__file__).resolve().parents[1] / "fixtures" / "full_incident_stream.json"
+        await stop_investigation()
+        async with observability._lock:
+            observability.reset()
+            for item in replay_observations(path, until):
+                observability.observe("event" if hasattr(item, "service") else "complaint", item.model_dump(mode="json"))
+        return await observability.run(until=until)
 
     @app.post("/ghost-test/rerun", response_model=RerunReceipt, status_code=202)
     async def ghost_test_rerun(body: RerunRequest) -> RerunReceipt:
@@ -248,18 +302,27 @@ def create_app(
 
     @app.post("/demo/start")
     async def demo_start() -> dict[str, object]:
-        return await control_plane.start_demo()
+        await stop_investigation()
+        async with observability._lock:
+            observability.reset()
+            return await control_plane.start_demo()
 
     @app.post("/demo/inject")
     async def demo_inject(body: DemoInjectRequest | None = None) -> dict[str, object]:
         try:
-            return await control_plane.inject_demo(body or DemoInjectRequest())
+            receipt = await control_plane.inject_demo(body or DemoInjectRequest())
+            schedule_investigation()
+            return receipt
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/demo/reset")
     async def demo_reset() -> dict[str, object]:
-        return await control_plane.reset_demo()
+        await stop_investigation()
+        async with observability._lock:
+            receipt = await control_plane.reset_demo()
+            observability.reset()
+            return receipt
 
     @app.get("/stream")
     async def stream(

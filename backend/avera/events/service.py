@@ -37,6 +37,7 @@ class EventStreamService:
     def __init__(self, repository: EventRepository, bus: EventBus) -> None:
         self.repository = repository
         self.bus = bus
+        self.observation_handlers = []
         self.metrics = {
             "ingested": 0,
             "duplicates": 0,
@@ -64,6 +65,14 @@ class EventStreamService:
             self.metrics["duplicates"] += 1
         else:
             self.metrics["ingested"] += 1
+        # Optional synchronous consumers inspect only validated durable records.
+        # Delivery is idempotent at each consumer, including duplicate ingestion.
+        for handler in self.observation_handlers:
+            try:
+                handler(stored.type.value, stored.data)
+            except Exception:
+                # An optional investigator must not block infrastructure delivery.
+                self.metrics["observation_failures"] = self.metrics.get("observation_failures", 0) + 1
         for attempt in range(3):
             try:
                 await self.bus.publish(stored)

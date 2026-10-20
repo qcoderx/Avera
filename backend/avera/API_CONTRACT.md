@@ -43,6 +43,18 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 - `POST /demo/start` and `/demo/reset` generate a 30-transfer healthy baseline. `/demo/inject` generates the default 1,284-transfer Bank X incident (thousands of streamed synthetic events) and is idempotent until the next reset. Counts can be adjusted within request bounds for smaller tests.
 - Reset advances the simulator event-time epoch so repeated demo runs retain unique stream deduplication keys.
 
-## Fixture
+## Observability integration (Shaz)
+
+`GET /observability` returns investigation state, parsed complaints, shared Incident
+and Hypothesis outputs, and actual Ghost Test feedback.
+`POST /observability/investigate` runs or waits for investigation.
+`POST /observability/replay?until=<timezone-aware ISO timestamp>` investigates only
+allowlisted fixture observations at or before that cutoff. The fixture lacks
+healthy comparator activity, so evidence-only replay reports insufficient evidence.
+`POST /demo/inject` now schedules investigation automatically; start/reset clear
+its state and cancel pending model work. No shared wire fields have changed.
+See `docs/observability.md` for configuration and current limits.
+
+## Full-story UI fixture
 
 `fixtures/full_incident_stream.json` is a recorded, ordered stream for the injected Gateway B acknowledgement failure and simultaneous app-release decoy. It includes complaints, incident, competing hypotheses, test results, fix plan, blast radius, approval decisions, and resolution events. Customer tokens in the fixture are synthetic.
