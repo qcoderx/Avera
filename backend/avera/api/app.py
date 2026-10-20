@@ -36,6 +36,7 @@ from avera.ghost_test import (
     RerunRequest,
     UnknownHypothesisError,
 )
+from avera.llm import GhostSummaryProvider, configured_test_summary_provider
 from avera.simulation.bank import SimulatedBank
 
 
@@ -82,6 +83,7 @@ def create_app(
     repository: EventRepository | None = None,
     bus: EventBus | None = None,
     bank: SimulatedBank | None = None,
+    test_summary_provider: GhostSummaryProvider | None = None,
 ) -> FastAPI:
     if repository is None and bus is None:
         repository, bus = _runtime_adapters()
@@ -96,7 +98,12 @@ def create_app(
         event_sink=simulator_adapter.on_event,
         complaint_sink=simulator_adapter.on_complaint,
     )
-    ghost_test_agent = GhostTestAgent(simulated_bank, service)
+    summary_provider = (
+        test_summary_provider
+        if test_summary_provider is not None
+        else configured_test_summary_provider()
+    )
+    ghost_test_agent = GhostTestAgent(simulated_bank, service, summary_provider)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -107,6 +114,8 @@ def create_app(
             yield
         finally:
             await simulator_adapter.close()
+            if summary_provider is not None and hasattr(summary_provider, "close"):
+                await summary_provider.close()
             await bus.close()
             await repository.close()
 
@@ -122,6 +131,7 @@ def create_app(
     app.state.simulated_bank = simulated_bank
     app.state.simulator_ingestion = simulator_adapter
     app.state.ghost_test_agent = ghost_test_agent
+    app.state.ghost_test_summary_provider = summary_provider
     control_plane = ControlPlane(
         simulated_bank,
         service,
@@ -138,6 +148,11 @@ def create_app(
             "event_bus": "kafka" if isinstance(bus, KafkaRedpandaEventBus) else "memory",
             "simulator_queue_depth": simulator_adapter._queue.qsize(),
             "simulator_adapter_failures": simulator_adapter.failures,
+            "ghost_test_summary": {
+                "source": summary_provider.source if summary_provider is not None else "local",
+                "model": summary_provider.model if summary_provider is not None else None,
+                "fallbacks": ghost_test_agent.summary_failures,
+            },
             "metrics": dict(service.metrics),
         }
 

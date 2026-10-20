@@ -19,7 +19,8 @@ def _fixture_hypotheses() -> list[dict[str, object]]:
     return [record["data"] for record in fixture["records"] if record["type"] == "hypothesis"]
 
 
-def test_seeded_incident_completes_ten_clean_cycles() -> None:
+def test_seeded_incident_completes_ten_clean_cycles(monkeypatch) -> None:
+    monkeypatch.delenv("AVERA_GHOST_SUMMARY_MODEL", raising=False)
     hypotheses = _fixture_hypotheses()
     assert {item["id"] for item in hypotheses} >= {"H1", "H3"}
 

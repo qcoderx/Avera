@@ -34,6 +34,7 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 - In the single-bank demo, canonical Kafka records use a stable bank key. SSE reads persisted records in sequence order and tolerates duplicated or coalesced broker wake-ups.
 - Configure both `AVERA_DATABASE_URL` and `AVERA_KAFKA_BOOTSTRAP_SERVERS` for PostgreSQL/Kafka mode. With neither configured, the API uses in-memory adapters for local development.
 - `POST /hypotheses` emits a `Hypothesis` and its `TestResult` to `/stream`; confidence at or above `0.85` is eligible for handoff, otherwise `send_back_to_observability` is true.
+- The `/hypotheses` response includes a short `summary`, `summary_source`, and optional `summary_model`. Without explicit model configuration this is generated locally. An optional GPT summary is advisory only; deterministic `TestResult` confidence/verdict fields control handoff and are never modified by the model.
 - `POST /ghost-test/rerun` uses the current simulated Bank X route in an isolated copy. It never mutates the live bank or moves real funds.
 - `POST /twin/simulate` compares the current route with a candidate route using detached simulator copies; it never changes the live route.
 - Approval flow is two-step: `POST /approvals` creates a pending record, then `POST /approvals/{id}` records an in-platform decision. Only an approved engineer-level `config` request with a matching `action=reroute`, `destination_bank`, and `to_gateway` can be applied by `POST /admin/route`.

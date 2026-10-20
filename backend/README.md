@@ -34,3 +34,5 @@ Useful routes:
 - `GET /health` reports adapter mode and in-process delivery counters.
 
 The simulator and all fixture identifiers are synthetic. No real bank, customer, SMS, or payment system is contacted. SMS and code approval records are audit/demo objects only; this API does not dispatch messages or execute code.
+
+Ghost Test scoring and route decisions remain deterministic. To add an optional GPT-generated summary of aggregate test measurements, set `OPENAI_API_KEY` and `AVERA_GHOST_SUMMARY_MODEL=gpt-5.4-mini`. The model receives only test type/count/score/verdict aggregates (no claims, customer identifiers, raw events, or tools); failures fall back to the local summary. The summary is descriptive only and does not change confidence, handoff, approvals, or routing.

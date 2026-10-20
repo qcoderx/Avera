@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -18,11 +19,13 @@ from avera.contracts import (
     TraceStep,
 )
 from avera.events.service import EventStreamService
+from avera.llm import GhostSummaryProvider
 from avera.simulation.bank import SimulatedBank, TransferResult, TransferStatus
 
 HANDOFF_THRESHOLD = 0.85
 POSTING_SLO_MS = 250
 CONFIDENCE_CALIBRATION = 0.96
+logger = logging.getLogger(__name__)
 
 
 class HypothesisSubmission(ContractModel):
@@ -48,6 +51,9 @@ class HypothesisEvaluationSet(ContractModel):
     handoff_threshold: float = HANDOFF_THRESHOLD
     validated_hypothesis_ids: list[str]
     send_back_to_observability: bool
+    summary: str
+    summary_source: str
+    summary_model: str | None = None
 
 
 class RerunRequest(ContractModel):
@@ -75,15 +81,22 @@ class GhostTestAgent:
     with a richer twin later does not change the hypothesis or TestResult API.
     """
 
-    def __init__(self, bank: SimulatedBank, event_stream: EventStreamService) -> None:
+    def __init__(
+        self,
+        bank: SimulatedBank,
+        event_stream: EventStreamService,
+        summary_provider: GhostSummaryProvider | None = None,
+    ) -> None:
         self.bank = bank
         self.event_stream = event_stream
+        self.summary_provider = summary_provider
         self._lock = asyncio.Lock()
         self._run_number = 0
         self._record_number = 0
         self._hypotheses: dict[str, Hypothesis] = {}
         self._original_results: dict[str, TestResult] = {}
         self._release_seen = False
+        self.summary_failures = 0
 
     async def reset(self) -> None:
         """Discard demo-specific hypothesis state while preserving unique run IDs."""
@@ -114,10 +127,24 @@ class GhostTestAgent:
                 if item.test_result.confidence >= HANDOFF_THRESHOLD
                 and item.test_result.verdict == TestVerdict.VALIDATED
             ]
+            summary = self._local_summary(evaluations)
+            summary_source = "local"
+            summary_model = None
+            if self.summary_provider is not None:
+                try:
+                    summary = await self.summary_provider.summarize(self._summary_evidence(evaluations))
+                    summary_source = self.summary_provider.source
+                    summary_model = self.summary_provider.model
+                except Exception:
+                    self.summary_failures += 1
+                    logger.warning("Ghost Test summary model failed; using local summary", exc_info=True)
             return HypothesisEvaluationSet(
                 evaluations=evaluations,
                 validated_hypothesis_ids=validated,
                 send_back_to_observability=not bool(validated),
+                summary=summary,
+                summary_source=summary_source,
+                summary_model=summary_model,
             )
 
     async def rerun(self, request: RerunRequest) -> RerunReceipt:
@@ -506,6 +533,35 @@ class GhostTestAgent:
     def _next_record_time(self) -> datetime:
         self._record_number += 1
         return datetime.now(timezone.utc) + timedelta(microseconds=self._record_number)
+
+    @staticmethod
+    def _summary_evidence(evaluations: list[HypothesisEvaluation]) -> list[dict[str, object]]:
+        """Pass only aggregate measurements; omit claims, customer IDs, and raw events."""
+        return [
+            {
+                "test_number": index + 1,
+                "test_type": GhostTestAgent._classify(item.hypothesis.zone) or "unsupported",
+                "runs": item.test_result.runs,
+                "reproduced": item.test_result.reproduced,
+                "confidence": item.test_result.confidence,
+                "verdict": item.test_result.verdict.value,
+                "disproof_passed": item.test_result.disproof_passed,
+            }
+            for index, item in enumerate(evaluations)
+        ]
+
+    @staticmethod
+    def _local_summary(evaluations: list[HypothesisEvaluation]) -> str:
+        validated = sum(
+            item.test_result.verdict == TestVerdict.VALIDATED
+            and item.test_result.confidence >= HANDOFF_THRESHOLD
+            for item in evaluations
+        )
+        return (
+            f"Deterministic simulator checks validated {validated} of {len(evaluations)} hypotheses "
+            f"at the {HANDOFF_THRESHOLD:.0%} handoff threshold. Scores and verdicts come from the "
+            "simulated test results."
+        )
 
 
 __all__ = [
