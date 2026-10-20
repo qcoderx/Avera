@@ -677,7 +677,7 @@
         "txn_count": 1284,
         "customer_count": 1109,
         "silent_count": 1096,
-        "exposure_ngn": "44298000",
+        "exposure_ngn": "16691000",
         "customers": [
           "cust_demo_0001",
           "cust_demo_0002",
@@ -1825,8 +1825,8 @@
           "incident_id": "AV-48291",
           "action": "reroute",
           "destination_bank": "BANK_X",
-          "from_route": "gateway_b.bank_x",
-          "to_route": "gateway_c.bank_x"
+          "from_gateway": "gateway_b",
+          "to_gateway": "gateway_c"
         }
       }
     },
