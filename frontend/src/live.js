@@ -2,6 +2,7 @@
 // The model keeps the same shape as fixtures.js, so every view works on live or recorded data.
 
 import { fixture } from './fixtures.js';
+import { humanize } from './prose.js';
 
 const ZONE_NODE = {
   'core-banking': 'core',
@@ -326,10 +327,10 @@ export function viewModel(store, routes, displayStep) {
     state: hypothesisState(test),
     zone: pretty(hypothesis.zone),
     owner: (hypothesis.routed_to || []).map(pretty).join(', ') || 'Unassigned',
-    claim: hypothesis.claim,
-    evidence: hypothesis.evidence_for.map((id) => run.evidence.get(id) || id),
-    against: hypothesis.evidence_against.map((id) => run.evidence.get(id) || id).join('; ') || 'No contrary observations recorded.',
-    disproof: hypothesis.disproof,
+    claim: humanize(hypothesis.claim),
+    evidence: hypothesis.evidence_for.map((id) => humanize(run.evidence.get(id) || id)),
+    against: humanize(hypothesis.evidence_against.map((id) => run.evidence.get(id) || id).join('; ')) || 'No contrary observations recorded.',
+    disproof: humanize(hypothesis.disproof),
   }));
   const top = hypotheses[0];
 
@@ -337,7 +338,7 @@ export function viewModel(store, routes, displayStep) {
     id: test.id.length > 18 ? `T-${String(ranked.findIndex((item) => item.test === test) + 1).padStart(2, '0')}` : test.id,
     realId: test.id,
     hypothesis: label.get(hypothesis.id),
-    name: test.test_plan,
+    name: humanize(test.test_plan),
     runs: `${test.reproduced}/${test.runs}`,
     result: { validated: 'failed as predicted', rejected: 'hypothesis disproved', inconclusive: 'inconclusive' }[test.verdict],
     duration: test.control ? `Control ${pretty(test.control.route)} · ${test.control.reproduced}/${test.control.runs}` : 'No control registered',
@@ -389,8 +390,8 @@ export function viewModel(store, routes, displayStep) {
     if (lower.includes('patch')) return code ? (code.status === 'pending' ? 'review' : code.status) : 'prepared';
     return 'queued';
   };
-  const planSteps = plan ? [...plan.steps.map((item, index) => ({ n: String(index + 1).padStart(2, '0'), owner: pretty(item.owner), title: item.title, detail: item.description, status: stepStatus(item.title) })),
-    { n: String(plan.steps.length + 1).padStart(2, '0'), owner: 'Ghost Test', title: 'Verify service restoration', detail: plan.verification, status: verified ? 'verified' : 'waiting' }] : [];
+  const planSteps = plan ? [...plan.steps.map((item, index) => ({ n: String(index + 1).padStart(2, '0'), owner: pretty(item.owner), title: humanize(item.title), detail: humanize(item.description), status: stepStatus(item.title) })),
+    { n: String(plan.steps.length + 1).padStart(2, '0'), owner: 'Ghost Test', title: 'Verify service restoration', detail: humanize(plan.verification), status: verified ? 'verified' : 'waiting' }] : [];
 
   const approvalItems = approvals.sort((a, b) => a.seq - b.seq).map((item) => ({
     id: item.id,
@@ -481,8 +482,9 @@ export function viewModel(store, routes, displayStep) {
       reconciliationLabel: 'Reconciliation batch',
       simulationSuccess: config?.payload?.simulated_success_rate != null ? Number((config.payload.simulated_success_rate * 100).toFixed(1)) : null,
       steps: planSteps,
-      rollback: plan.rollback,
-      cause: validatedTest ? `${pretty(validatedTest.hypothesis.zone)}: ${validatedTest.hypothesis.claim}` : plan.steps[0]?.title,
+      rollback: humanize(plan.rollback),
+      cause: humanize(validatedTest ? validatedTest.hypothesis.claim : plan.steps[0]?.title),
+      causeZone: validatedTest ? pretty(validatedTest.hypothesis.zone) : '',
       owners: plan.owners.map(pretty),
     } : null,
     approvals: approvalItems,

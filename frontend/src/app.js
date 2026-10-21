@@ -7,6 +7,7 @@ import { LiveStore, viewModel, pretty, naira } from './live.js';
 import morphdom from 'morphdom';
 import { AgentDirector, AGENTS } from './agents.js';
 import { createChat } from './chat.js';
+import { claimHtml } from './prose.js';
 
 const app = document.querySelector('#app');
 const params = new URLSearchParams(window.location.search);
@@ -435,7 +436,7 @@ function nodeCard() {
   if (map.tags[node.id]) facts.push(['Status', map.tags[node.id]]);
   return `<div class="node-card-head"><div class="node-glyph status-${status}"><i></i></div><div><span>${lane.label}</span><strong>${node.name}</strong></div><button data-map-action="reset" aria-label="Close component details">${icon('close', 16)}</button></div>
     <h3>${statusLabels[status]}</h3>
-    <p>${hypothesis ? hypothesis.claim : status === 'healthy' ? 'No abnormal errors, latency or volume changes on this component.' : map.insight.body}</p>
+    ${hypothesis ? `<div class="claim">${claimHtml(hypothesis.claim)}</div>` : `<p>${status === 'healthy' ? 'No abnormal errors, latency or volume changes on this component.' : map.insight.body}</p>`}
     <dl>${facts.map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}</dl>`;
 }
 
@@ -504,7 +505,7 @@ function hypothesesView() {
       <div class="hypothesis-board">
         ${D.hypotheses.map((hypothesis) => `<article class="hypothesis-row ${hypothesis.state}" data-reveal>
           <div class="hypothesis-id"><span>${hypothesis.id}</span><i>${hypothesis.rank}</i></div>
-          <div class="hypothesis-claim"><div class="row-meta"><span>${hypothesis.zone}</span><em>${hypothesis.state}</em></div><h2>${hypothesis.claim}</h2><p>Routed to ${hypothesis.owner}</p></div>
+          <div class="hypothesis-claim"><div class="row-meta"><span>${hypothesis.zone}</span><em>${hypothesis.state}</em></div><div class="claim">${claimHtml(hypothesis.claim, { headline: 'h2' })}</div><p>Routed to ${hypothesis.owner}</p></div>
           <div class="confidence"><strong><span data-count="${hypothesis.confidence}">${hypothesis.confidence}</span><small>%</small></strong><div><i data-bar="${hypothesis.confidence}" style="width:${hypothesis.confidence}%"></i><b style="left:85%"></b></div><span>${hypothesis.confidence >= 85 ? 'Threshold cleared' : 'Below threshold'}</span></div>
           <details><summary>Evidence and disproof ${icon('arrow', 16)}</summary><div class="hypothesis-detail"><div><span>Evidence for</span>${hypothesis.evidence.map((item) => `<p>${item}</p>`).join('') || '<p>No supporting references.</p>'}</div><div><span>Evidence against</span><p>${hypothesis.against}</p></div><div><span>Disproof condition</span><p>${hypothesis.disproof}</p></div></div>${isLive() ? `<div class="hypothesis-actions"><button class="secondary-button compact" data-live="retest" data-hypothesis="${hypothesis.realId}" ${state.busy ? 'disabled' : ''}>${icon('flask', 16)} Re-test with Ghost Test</button></div>` : ''}</details>
         </article>`).join('')}
@@ -585,8 +586,8 @@ function planView() {
   return `
     ${header(plan.simulationSuccess != null ? `<div class="plan-confidence"><span>Simulation success</span><strong>${plan.simulationSuccess}%</strong></div>` : '')}
     <section class="plan-hero" data-reveal>
-      <div><span>Validated cause</span><h2>${isLive() ? plan.cause : 'Gateway B acknowledgement handling fails for Bank X transfers.'}</h2><p>${isLive() ? `Owners: ${plan.owners.join(', ')}.` : 'Contain the route first, then repair the connector and reconcile uncertain transaction states.'}</p></div>
-      <div class="eta-band"><div><span>Containment</span><strong>${plan.containmentEta}</strong></div><i></i><div><span>Permanent fix</span><strong>${plan.fullEta}</strong></div><i></i><div><span>${plan.reconciliationLabel || 'Reconciliation'}</span><strong>${plan.reconciliationEta}</strong></div></div>
+      <div><span>Validated cause${plan.causeZone ? ` · ${plan.causeZone}` : ''}</span><div class="claim">${claimHtml(isLive() ? plan.cause : 'Gateway B acknowledgement handling fails for Bank X transfers.', { headline: 'h2' })}</div><p>${isLive() ? `Owners: ${plan.owners.join(', ')}.` : 'Contain the route first, then repair the connector and reconcile uncertain transaction states.'}</p></div>
+      <div class="eta-band"><div><span>Containment</span>${etaHtml(plan.containmentEta)}</div><i></i><div><span>Permanent fix</span>${etaHtml(plan.fullEta)}</div><i></i><div><span>${plan.reconciliationLabel || 'Reconciliation'}</span>${etaHtml(plan.reconciliationEta)}</div></div>
     </section>
     <section class="plan-body" data-reveal>
       <div class="steps" data-stagger><div class="section-title"><span>Execution plan</span><small>Human approval required before routing, messaging and reconciliation</small></div>${plan.steps.map((step, index) => `<article class="plan-step"><span>${step.n}</span><div><small>${step.owner}</small><h3>${step.title}</h3><p>${step.detail}</p></div><em class="step-${step.status}">${step.status}</em>${index < plan.steps.length - 1 ? '<i></i>' : ''}</article>`).join('')}</div>
@@ -633,6 +634,14 @@ function approvalsView() {
         <div class="decision-actions"><button class="secondary-button" data-decision="reject" ${active.status !== 'pending' || !session || state.busy ? 'disabled' : ''}>Reject</button><button class="primary-button" data-decision="approve" ${active.status !== 'pending' || !session || state.busy ? 'disabled' : ''}>${active.status === 'pending' ? (state.busy === 'decide' ? 'Recording decision…' : 'Approve action') : `Decision: ${statusLabel(active)}${active.approver ? ` by ${active.approver}` : ''}`}</button></div>
       </div>
     </section>`;
+}
+
+// "4 hours (3 hours for permanent fix; 4 hours for reconciliation)" reads as a figure plus a caption.
+function etaHtml(text) {
+  const value = String(text || '—');
+  const [, figure, rest] = /^([\d.,]+\s*[a-z]+)\b\s*(.*)$/i.exec(value) || [null, value, ''];
+  const note = rest.replace(/^\((.*)\)$/, '$1').trim();
+  return `<strong>${figure}</strong>${note ? `<small>${note}</small>` : ''}`;
 }
 
 function approverBar(active, session) {

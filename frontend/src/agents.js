@@ -162,7 +162,7 @@ const HANDOFFS = {
   4: [['ghost', 'Validation finished. Handing the validated cause to Blast Radius.'], ['blast', 'On it. Searching every transaction for customers hit by this fingerprint.']],
   5: [['blast', 'Impact mapped. Handing the plan to Resolution.'], ['resolution', 'Waiting for approval. I will not change anything in production until an engineer approves the reroute.']],
   6: [['resolution', 'Approval received. Reroute applied. Asking Ghost Test to verify.'], ['ghost', 'Rerun complete: the failure no longer reproduces.'],
-    ['observability', 'Done.'], ['ghost', 'Done.'], ['blast', 'Done.'], ['resolution', 'Done. Incident resolved.']],
+    ['resolution', 'Done. Incident resolved. All four agents are standing down; ask any of us if you need something.']],
 };
 
 // Paces the displayed story so a burst of backend records still reads as distinct handoffs,
@@ -273,6 +273,11 @@ export class AgentDirector {
     this.refresh();
     this.beats += 1;
     AGENTS.forEach(({ id }) => { this.lineIndex[id] = (this.lineIndex[id] || 0) + 1; });
+    // Once the incident is resolved the agents stay quiet in the channel until someone asks.
+    if (this.displayStep === 6) {
+      this.emit('beat');
+      return;
+    }
     const active = AGENTS.find(({ id }) => this.statuses[id].active);
     if (active && this.source().ctx.chatty) this.post(active.id, this.line(active.id));
     // Every fourth beat a supporting agent checks in, so nobody goes quiet for long.
@@ -323,7 +328,7 @@ function reply(agentId, intent, D, step, ctx, statuses) {
   switch (intent) {
     case 'greet': return `Hi! I'm ${agentById[agentId].name}. Right now: ${now}`;
     case 'help': return 'Ask me what I am doing, why, how many customers are affected, what is pending approval, the ETA, the rollback plan, or what happens next. Mention an agent by name to ask them directly.';
-    case 'status': return `${status.headline}. ${status.lines.join(' ')}`;
+    case 'status': return status.lines[0]?.startsWith(status.headline) ? status.lines.join(' ') : `${status.headline}. ${status.lines.join(' ')}`;
     case 'next': {
       const next = { 0: 'If anything breaks, I will open an incident.', 1: 'Next I fuse these signals into an incident and propose hypotheses.', 2: 'Next Ghost Test tries to disprove every hypothesis in the twin.', 3: 'Next Blast Radius finds every affected customer.', 4: 'Next Resolution asks a human to approve the fix.', 5: 'Once approved, the reroute is applied and Ghost Test verifies it.', 6: 'The incident is resolved. Follow-ups are the patch review and reconciliation.' }[step];
       return next;
