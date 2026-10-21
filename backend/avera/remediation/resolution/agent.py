@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
 from datetime import timedelta
 from typing import Any
 
@@ -25,7 +24,7 @@ from avera.remediation.models import (
     SmsDraft,
 )
 from avera.remediation.ports import Ports
-from avera.remediation.resolution.sms_dispatch import dispatch_sms
+from avera.remediation.resolution.sms_dispatch import SmsDispatchReport, dispatch_sms
 from avera.remediation.store import RemediationCase, RemediationStatus, RemediationStore
 
 log = logging.getLogger(__name__)
@@ -55,6 +54,17 @@ class ResolutionAgent:
         if case is None:
             log.warning("decision %s for unknown incident %s", approval.id, approval.incident_id)
             return
+        expected_approval_id = case.approval_ids.get(str(approval.kind))
+        plan_id = getattr(approval.payload, "plan_id", case.plan.id)
+        if expected_approval_id != approval.id or plan_id != case.plan.id:
+            self._audit.append(
+                ts=self._ports.clock.now(), actor=ACTOR, action="stale_approval_ignored",
+                incident_id=case.incident_id, subject_type="approval", subject_id=approval.id,
+                payload=approval.payload_hash,
+                detail={"active_plan_id": case.plan.id, "approval_plan_id": plan_id},
+            )
+            log.warning("ignoring stale approval %s for incident %s", approval.id, approval.incident_id)
+            return
         if approval.id in case.executed_approvals:
             return
         if approval.status == ApprovalStatus.REJECTED:
@@ -72,12 +82,14 @@ class ResolutionAgent:
                        detail={"reason": "approved payload failed integrity check; refusing to execute"})
             return
 
-        case.executed_approvals.add(approval.id)
         payload = approval.payload
+        if isinstance(payload, SmsDraft):
+            self._send_sms(case, approval, payload)
+            return
+
+        case.executed_approvals.add(approval.id)
         if isinstance(payload, ConfigChange):
             self._apply_route(case, approval, payload)
-        elif isinstance(payload, SmsDraft):
-            self._send_sms(case, approval, payload)
         elif isinstance(payload, ReconciliationBatch):
             self._emit(case, ResolutionAction.RECONCILIATION_HANDED_OFF, "handed_off", approval_id=approval.id,
                        detail={"batch_id": payload.id, "items": len(payload.items),
@@ -85,6 +97,20 @@ class ResolutionAgent:
         elif isinstance(payload, CodePatch):
             self._emit(case, ResolutionAction.PATCH_APPROVED, "approved_for_merge", approval_id=approval.id,
                        diff_url=f"/approvals/{approval.id}", detail={"target": payload.target})
+
+    def retry_approved_sms(self, approval_id: str) -> SmsDispatchReport:
+        """Retry only recipients whose send failed; the gateway must honor idempotency keys."""
+        approval = self._approvals.get(approval_id)
+        if approval.status != ApprovalStatus.APPROVED or not isinstance(approval.payload, SmsDraft):
+            raise ValueError("only an approved SMS request can be retried")
+        case = self._require(approval.incident_id)
+        if case.approval_ids.get(str(approval.kind)) != approval.id:
+            raise ValueError("SMS approval is not for the active remediation plan")
+        if approval.id in case.executed_approvals:
+            raise ValueError("SMS approval has no failed recipients to retry")
+        if approval.id not in case.sms_retry_customers:
+            raise ValueError("SMS approval has not had a failed delivery attempt")
+        return self._send_sms(case, approval, approval.payload)
 
     def verify(self, incident_id: str) -> RemediationStatus:
         """Rerun the original failing Ghost Tests, then check live signals. Safe to call repeatedly."""
@@ -181,10 +207,20 @@ class ResolutionAgent:
         self._emit(case, ResolutionAction.PATCH_OPENED, "awaiting_engineer_review", approval_id=approval.id,
                    diff_url=f"/approvals/{approval.id}", detail={"target": proposal.target})
 
-    def _send_sms(self, case: RemediationCase, approval: Approval, draft: SmsDraft) -> None:
-        report = dispatch_sms(draft, approval.id, self._ports.contacts, self._ports.sms)
+    def _send_sms(self, case: RemediationCase, approval: Approval, draft: SmsDraft) -> SmsDispatchReport:
+        retry_customers = case.sms_retry_customers.get(approval.id)
+        report = dispatch_sms(draft, approval.id, self._ports.contacts, self._ports.sms,
+                              customer_tokens=retry_customers)
+        if report.failed:
+            case.sms_retry_customers[approval.id] = set(report.failed_customer_tokens)
+        else:
+            case.sms_retry_customers.pop(approval.id, None)
+            case.executed_approvals.add(approval.id)
         self._emit(case, ResolutionAction.SMS_SENT, "sent" if report.failed == 0 else "partially_failed",
-                   approval_id=approval.id, detail=asdict(report))
+                   approval_id=approval.id,
+                   detail={"sent": report.sent, "skipped_opted_out": report.skipped_opted_out,
+                           "skipped_unreachable": report.skipped_unreachable, "failed": report.failed})
+        return report
 
     def _raise_alert(self, case: RemediationCase, *, severity: str, next_step: str) -> None:
         handoff = case.handoff

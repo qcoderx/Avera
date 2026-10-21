@@ -118,6 +118,14 @@ def test_handoff_below_threshold_is_rejected(world, remediation):
         remediation.on_validated(weak)
 
 
+def test_handoff_with_missing_impact_scope_is_rejected_before_blast_radius_query(world, remediation):
+    unscoped_incident = world.handoff.incident.model_copy(update={"fingerprint": {}})
+    handoff = world.handoff.model_copy(update={"incident": unscoped_incident})
+    with pytest.raises(HandoffRejected, match="missing impact-scope traits"):
+        remediation.on_validated(handoff)
+    assert remediation.approvals.list() == []
+
+
 def test_repeated_handoff_is_idempotent(world, remediation):
     first = remediation.on_validated(world.handoff)
     second = remediation.on_validated(world.handoff)

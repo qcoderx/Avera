@@ -1,9 +1,11 @@
 """Observability integration checks. ScriptedModel is an explicit test double only."""
 import asyncio
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 
@@ -61,6 +63,12 @@ def inject(client):
         "channel_switch_customers": 2})
 
 
+def approver_token(subject, role, secret="test-only-secret-material-at-least-32-bytes"):
+    now = int(time.time())
+    return jwt.encode({"sub": subject, "role": role, "iss": "avera", "aud": "avera-api",
+                       "iat": now, "exp": now + 300}, secret, algorithm="HS256")
+
+
 def test_healthy_then_injected_release_handoff_and_reset():
     model = ScriptedModel()
     with TestClient(create_app(observability_model=model)) as client:
@@ -85,6 +93,47 @@ def test_healthy_then_injected_release_handoff_and_reset():
         reset = client.get("/observability").json()
         assert reset["incident"] is None and reset["hypotheses"] == [] and reset["feedback"] is None
         assert reset["state"] == "collecting"
+
+
+def test_validated_ghost_handoff_creates_jwt_gated_remediation_and_route_executes(monkeypatch):
+    secret = "test-only-secret-material-at-least-32-bytes"
+    monkeypatch.setenv("AVERA_APPROVER_JWT_SECRET", secret)
+    with TestClient(create_app(observability_model=ScriptedModel())) as client:
+        inject(client)
+        result = client.post("/observability/investigate").json()
+        assert result["state"] == "tested", result
+        case_id = client.get("/health").json()["remediation"]["case_id"]
+        assert case_id == result["incident"]["id"]
+
+        engineer = {"Authorization": f"Bearer {approver_token('engineer-7', 'engineer', secret)}"}
+        dispute = {"Authorization": f"Bearer {approver_token('dispute-3', 'customer_dispute', secret)}"}
+        assert client.get("/approvals").status_code == 401
+        engineer_queue = client.get("/approvals", headers=engineer).json()
+        dispute_queue = client.get("/approvals", headers=dispute).json()
+        assert {item["kind"] for item in engineer_queue} == {"config"}
+        assert {item["kind"] for item in dispute_queue} == {"sms", "reconciliation"}
+
+        config = engineer_queue[0]
+        assert client.get(f"/approvals/{config['id']}", headers=dispute).status_code == 404
+        assert client.post(f"/approvals/{config['id']}", headers=dispute,
+                           json={"decision": "approve", "payload_hash": config["payload_hash"]}).status_code == 403
+        decision = client.post(f"/approvals/{config['id']}", headers=engineer,
+                               json={"decision": "approve", "payload_hash": config["payload_hash"]})
+        assert decision.status_code == 200, decision.text
+        assert client.get("/service-map").json()["routes"]["BANK_X"] == "gateway_c"
+
+        case = client.get(f"/remediation/{case_id}", headers=engineer)
+        assert case.status_code == 200
+        assert case.json()["blast_radius"]["txn_count"] > 0
+        assert case.json()["events"]
+        stream_records = client.app.state.event_repository._records
+        streamed_types = {record.type.value for record in stream_records}
+        assert {"approval", "resolution_event", "fix_plan", "blast_radius"} <= streamed_types
+
+        tampered = jwt.encode({"sub": "attacker", "role": "engineer", "iss": "avera", "aud": "avera-api",
+                               "iat": int(time.time()), "exp": int(time.time()) + 300},
+                              "wrong-signing-secret-material-000000000000", algorithm="HS256")
+        assert client.get("/approvals", headers={"Authorization": f"Bearer {tampered}"}).status_code == 401
 
 
 def make_agent(model=None):
@@ -118,6 +167,24 @@ def test_duplicate_delayed_conflict_and_unknown_outcome():
     assert asyncio.run(agent.run())["state"] == "insufficient_evidence"
     from avera.observability.signal_fusion import correlate
     assert correlate([event(code="TRANSFER_REQUESTED", payload={"transaction_id":"pending"})]) == []
+
+
+def test_new_source_events_reopen_a_previously_healthy_investigation():
+    agent = make_agent()
+    now = datetime.now(timezone.utc)
+    for i in range(3):
+        healthy = event(f"healthy-{i}", now - timedelta(seconds=400),
+                        code="ACK_RECEIVED", payload={"transaction_id": f"healthy-txn-{i}"})
+        agent.observe("event", healthy.model_dump(mode="json"))
+    assert asyncio.run(agent.run())["state"] == "healthy"
+
+    for i in range(4):
+        failed = event(f"failed-{i}", now, code="ACK_TIMEOUT",
+                       payload={"transaction_id": f"failed-txn-{i}", "destination_bank": "BANK_X"})
+        agent.observe("event", failed.model_dump(mode="json"))
+    refreshed = asyncio.run(agent.run())
+    assert refreshed["state"] == "degraded"
+    assert refreshed["incident"] is not None
 
 
 def test_parser_keeps_uncertain_match_unresolved_and_validates_amount():
@@ -356,4 +423,30 @@ def test_too_few_competing_zones_gets_one_explicit_model_correction():
         assert result["state"] == "hypotheses_ready" and model.rounds == 2
         assert model.calls[-1]["previous_output_error"] == "insufficient_competing_candidates"
         assert "three distinct" in model.calls[-1]["correction"]
+    asyncio.run(scenario())
+
+
+def test_contradictory_evidence_gets_an_explicit_model_correction():
+    class OverlapFirst(ScriptedModel):
+        rounds = 0
+        instructions_seen = []
+        async def generate(self, instructions, context, schema):
+            if issubclass(schema, Candidates):
+                self.instructions_seen.append(instructions)
+            result = await super().generate(instructions, context, schema)
+            if issubclass(schema, Candidates):
+                self.rounds += 1
+                if self.rounds == 1:
+                    result.hypotheses[0].evidence_against = result.hypotheses[0].evidence_for[:1]
+            return result
+    async def scenario():
+        model = OverlapFirst()
+        agent = await seeded_agent(model, lambda *_: None)
+        result = await agent.run(handoff=False)
+        assert result["state"] == "hypotheses_ready" and model.rounds == 2
+        assert model.calls[-1]["previous_output_error"] == "contradictory_reference_assignment"
+        assert "disjoint sets" in model.calls[-1]["correction"]
+        assert "Evidence lists are disjoint" in " ".join(model.instructions_seen[0].split())
+        assert "VALIDATION RETRY" in model.instructions_seen[1]
+        assert "must be disjoint sets" in model.instructions_seen[1]
     asyncio.run(scenario())

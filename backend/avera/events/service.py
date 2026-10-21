@@ -37,6 +37,7 @@ class EventStreamService:
     def __init__(self, repository: EventRepository, bus: EventBus) -> None:
         self.repository = repository
         self.bus = bus
+        self._outbox_flush_lock = asyncio.Lock()
         self.observation_handlers = []
         self.metrics = {
             "ingested": 0,
@@ -44,6 +45,7 @@ class EventStreamService:
             "publish_failures": 0,
             "dead_lettered": 0,
             "unpublished": 0,
+            "outbox_dispatch_failures": 0,
         }
 
     async def ingest(
@@ -73,25 +75,84 @@ class EventStreamService:
             except Exception:
                 # An optional investigator must not block infrastructure delivery.
                 self.metrics["observation_failures"] = self.metrics.get("observation_failures", 0) + 1
+        await self.flush_outbox()
+        status = await self.repository.outbox_status(stored.sequence)
+        delivery = {
+            "published": "published",
+            "dead_lettered": "dead_lettered",
+            "pending": "durable_unpublished",
+        }.get(status, "durable_unpublished")
+        return IngestOutcome(stored, created, delivery)
+
+    async def ingest_many(
+        self,
+        items: list[tuple[ContractObjectType | str, dict[str, Any]]],
+    ) -> list[IngestOutcome]:
+        """Persist an ordered callback batch; the outbox worker delivers it asynchronously."""
+        records = [normalize_record(object_type, payload) for object_type, payload in items]
+        stored_records = await self.repository.append_many(records)
+        outcomes: list[IngestOutcome] = []
+        for stored, created in stored_records:
+            if created:
+                self.metrics["ingested"] += 1
+            else:
+                self.metrics["duplicates"] += 1
+            for handler in self.observation_handlers:
+                try:
+                    handler(stored.type.value, stored.data)
+                except Exception:
+                    self.metrics["observation_failures"] = (
+                        self.metrics.get("observation_failures", 0) + 1
+                    )
+            outcomes.append(
+                IngestOutcome(
+                    stored,
+                    created,
+                    "durable_unpublished" if created else "duplicate",
+                )
+            )
+        return outcomes
+
+    async def flush_outbox(self, *, limit: int = 100) -> int:
+        """Publish committed events; a process crash is recovered from the outbox."""
+        async with self._outbox_flush_lock:
+            items = await self.repository.claim_outbox(limit=limit)
+            await asyncio.gather(*(self._deliver_outbox_item(item) for item in items))
+            return len(items)
+
+    async def _deliver_outbox_item(self, item) -> None:
+        record = item.record
+        last_error: Exception | None = None
         for attempt in range(3):
             try:
-                await self.bus.publish(stored)
-                return IngestOutcome(stored, created, "published")
-            except Exception as exc:  # Durable record remains available for SSE replay.
+                await self.bus.publish(record)
+                await self.repository.finish_outbox(record.sequence)
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
                 self.metrics["publish_failures"] += 1
                 if attempt < 2:
                     await asyncio.sleep(0.05 * (2**attempt))
-                    continue
-                reason = f"publish failed after 3 attempts: {type(exc).__name__}: {exc}"
-                try:
-                    await self.bus.dead_letter(stored, reason)
-                except Exception:
-                    self.metrics["unpublished"] += 1
-                    logger.exception("Event is durable but Kafka publish and DLQ both failed")
-                    return IngestOutcome(stored, created, "durable_unpublished")
-                self.metrics["dead_lettered"] += 1
-                return IngestOutcome(stored, created, "dead_lettered")
-        raise AssertionError("unreachable publish retry state")
+        if last_error is None:
+            return
+
+        reason = f"publish failed after 3 attempts: {type(last_error).__name__}: {last_error}"
+        try:
+            await self.bus.dead_letter(record, reason)
+            await self.repository.finish_outbox(
+                record.sequence, dead_lettered=True, error=reason
+            )
+            self.metrics["dead_lettered"] += 1
+        except Exception as dlq_error:
+            retry_error = (
+                f"publish failed ({type(last_error).__name__}); "
+                f"dead-letter failed ({type(dlq_error).__name__})"
+            )
+            await self.repository.finish_outbox(record.sequence, error=retry_error)
+            self.metrics["unpublished"] += 1
+            self.metrics["outbox_dispatch_failures"] += 1
+            logger.exception("Event is durable but Kafka publish and DLQ both failed")
 
     async def records_after(self, sequence: int, *, limit: int = 500) -> list[StreamRecord]:
         return await self.repository.list_after(sequence, limit=limit)

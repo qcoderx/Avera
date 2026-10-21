@@ -43,6 +43,7 @@ class ObservabilityAgent:
         self.late = 0
         self.parsed = {}
         self._prepared = None
+        self.input_version = 0
         self.generation = getattr(self, "generation", 0) + 1
 
     def observe(self, kind, data):
@@ -62,6 +63,10 @@ class ObservabilityAgent:
             return
         self.watermark = max(self.watermark or item.ts, item.ts)
         self.items[key] = item
+        self.input_version += 1
+        if self.state in {"healthy", "insufficient_evidence", "hypotheses_ready", "hypotheses_ready_degraded",
+                          "tested", "tested_degraded", "escalated", "degraded", "error"}:
+            self._invalidate_analysis()
         if self._last_eviction is None or self.watermark - self._last_eviction >= timedelta(seconds=10):
             self.items = {k: v for k, v in self.items.items() if v.ts >= self.watermark - self.window * 2}
             self._last_eviction = self.watermark
@@ -75,6 +80,30 @@ class ObservabilityAgent:
                 "feedback": self.feedback.model_dump(mode="json") if self.feedback else None}
 
     async def run(self, *, until: datetime | None = None, handoff: bool = True):
+        # Source events may continue arriving while parsing/model/Ghost Test work awaits.
+        # Never publish a result prepared from an older input version as current.
+        for _ in range(3):
+            input_version = self.input_version
+            result = await self._run_once(until=until, handoff=handoff)
+            if input_version == self.input_version:
+                return result
+            self._invalidate_analysis()
+        self.state = "collecting"
+        self.errors = ["observation_batch_changed_during_investigation"]
+        return self.snapshot()
+
+    def _invalidate_analysis(self):
+        self.incident = None
+        self.hypotheses = []
+        self.feedback = None
+        self.parsed = {}
+        self._prepared = None
+        self.revisions = 0
+        self.errors = []
+        self.state = "collecting"
+        self.generation += 1
+
+    async def _run_once(self, *, until: datetime | None = None, handoff: bool = True):
         async with self._lock:
             if self.state in {"tested", "tested_degraded", "escalated", "degraded", "error"}:
                 return self.snapshot()

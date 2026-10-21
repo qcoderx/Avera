@@ -27,6 +27,7 @@ class RemediationCase:
     status: RemediationStatus = RemediationStatus.AWAITING_APPROVAL
     approval_ids: dict[str, str] = field(default_factory=dict)
     executed_approvals: set[str] = field(default_factory=set)
+    sms_retry_customers: dict[str, set[str]] = field(default_factory=dict)
     applied_change: RouteChange | None = None
     applied_at: datetime | None = None
     events: list[ResolutionEvent] = field(default_factory=list)
@@ -51,3 +52,7 @@ class RemediationStore:
     def save(self, case: RemediationCase) -> None:
         with self._lock:
             self._cases[case.incident_id] = case
+
+    def clear(self) -> None:
+        with self._lock:
+            self._cases.clear()

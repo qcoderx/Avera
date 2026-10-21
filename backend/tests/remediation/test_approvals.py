@@ -72,22 +72,54 @@ def test_new_plan_supersedes_pending_requests(case, remediation, world):
     assert remediation.approvals.get(new_case.approval_ids["sms"]).supersedes == old_sms
 
 
+def test_new_plan_supersedes_pending_code_patch_and_listener_rejects_stale_approval(case, remediation, world):
+    approve(remediation, case.approval_ids["config"], ENGINEER)
+    old_code = remediation.approvals.get(case.approval_ids["code"])
+
+    h_new = world.handoff.hypothesis.model_copy(update={"id": "H1-new"})
+    handoff = world.handoff.model_copy(update={
+        "hypothesis": h_new,
+        "test_result": world.handoff.test_result.model_copy(update={"hypothesis_id": "H1-new"}),
+    })
+    new_case = remediation.on_validated(handoff)
+
+    assert old_code.status == ApprovalStatus.PENDING
+    assert remediation.approvals.get(old_code.id).status == ApprovalStatus.SUPERSEDED
+    with pytest.raises(ApprovalNotPending):
+        approve(remediation, old_code.id, ENGINEER)
+
+    stale_approved = old_code.model_copy(update={"status": ApprovalStatus.APPROVED, "approver": ENGINEER.id})
+    remediation.resolution.on_decision(stale_approved)
+    assert new_case.plan.id != old_code.payload.plan_id
+    assert all(e.action.value != "approve_connector_patch" for e in new_case.events)
+
+
 def test_http_router_maps_errors(case, remediation):
     app = FastAPI()
-    app.include_router(build_router(remediation.approvals))
+    principal = {"value": ENGINEER}
+
+    def current_approver():
+        return principal["value"]
+
+    app.include_router(build_router(remediation.approvals, current_approver=current_approver))
     client = TestClient(app)
     approval_id = case.approval_ids["config"]
     payload_hash = remediation.approvals.get(approval_id).payload_hash
 
-    def post(role, body):
-        return client.post(f"/approvals/{approval_id}", json=body,
-                           headers={"X-Avera-User": "eng.tunde", "X-Avera-Role": role})
+    def post(body, headers=None):
+        return client.post(f"/approvals/{approval_id}", json=body, headers=headers or {})
 
-    assert post("customer_dispute", {"decision": "approve", "payload_hash": payload_hash}).status_code == 403
-    assert post("engineer", {"decision": "approve", "payload_hash": "bad"}).status_code == 412
-    assert post("engineer", {"decision": "approve", "payload_hash": payload_hash}).status_code == 200
-    assert post("engineer", {"decision": "approve", "payload_hash": payload_hash}).status_code == 409
-    assert client.get("/approvals", params={"status": "pending"}).status_code == 200
+    principal["value"] = DISPUTE
+    assert post({"decision": "approve", "payload_hash": payload_hash}).status_code == 403
+    assert client.get(f"/approvals/{approval_id}").status_code == 404
+    assert all(a["kind"] != "config" for a in client.get("/approvals", params={"status": "pending"}).json())
+
+    principal["value"] = ENGINEER
+    assert post({"decision": "approve", "payload_hash": "bad"}).status_code == 412
+    # These untrusted headers cannot override the verified principal supplied by the dependency.
+    assert post({"decision": "approve", "payload_hash": payload_hash},
+                headers={"X-Avera-User": "attacker", "X-Avera-Role": "customer_dispute"}).status_code == 200
+    assert post({"decision": "approve", "payload_hash": payload_hash}).status_code == 409
     assert client.get("/approvals/missing").status_code == 404
 
 
@@ -108,7 +140,8 @@ def test_streamed_approvals_conform_and_carry_the_hash_to_send_back(case, remedi
     from avera.contracts import Approval as SharedApproval, ContractObjectType
 
     streamed = {a["id"]: SharedApproval.model_validate(a) for a in world.events.of_type(ContractObjectType.APPROVAL)}
-    assert set(streamed) == {"approval-config-AV-48291", "approval-sms-AV-48291"}
+    assert set(streamed) == {"approval-config-AV-48291", "approval-sms-AV-48291",
+                             "approval-reconciliation-AV-48291"}
     config = streamed["approval-config-AV-48291"]
     assert (config.level.value, config.payload["from_route"], config.payload["to_route"]) == (
         "level_3", "gateway_b.bank_x", "gateway_c.bank_x")
@@ -117,11 +150,11 @@ def test_streamed_approvals_conform_and_carry_the_hash_to_send_back(case, remedi
     assert remediation.approvals.get(config.id).status == ApprovalStatus.APPROVED
 
 
-def test_reconciliation_is_held_back_until_the_shared_contract_supports_it(case, world):
+def test_reconciliation_approval_is_published_using_the_shared_contract(case, world):
     from avera.contracts import ContractObjectType
 
     assert "reconciliation" in case.approval_ids
-    assert all(a["kind"] != "reconciliation" for a in world.events.of_type(ContractObjectType.APPROVAL))
+    assert any(a["kind"] == "reconciliation" for a in world.events.of_type(ContractObjectType.APPROVAL))
 
 
 def test_ttl_is_configurable(world):

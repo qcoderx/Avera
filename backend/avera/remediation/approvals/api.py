@@ -1,13 +1,11 @@
-"""HTTP surface for approvals. Koded mounts this router in the main FastAPI app.
-
-Identity comes from X-Avera-User / X-Avera-Role headers until real authentication exists.
-"""
+"""HTTP surface for approvals, mounted with the host application's verified-principal dependency."""
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Literal
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from avera.remediation.approvals.service import (
@@ -19,7 +17,7 @@ from avera.remediation.approvals.service import (
     ApproverNotAuthorised,
     StalePayload,
 )
-from avera.remediation.models import ApprovalStatus, Role
+from avera.remediation.models import ApprovalStatus
 
 
 class DecisionRequest(BaseModel):
@@ -28,35 +26,56 @@ class DecisionRequest(BaseModel):
     reason: str | None = None
 
 
-def build_router(service: ApprovalService) -> APIRouter:
+def build_router(
+    service: ApprovalService,
+    *,
+    current_approver: Callable[..., Approver],
+    after_decision: Callable[[], Awaitable[None]] | None = None,
+) -> APIRouter:
+    """Build approval routes using an application-provided authenticated principal.
+
+    The dependency must resolve a verified identity and role (for example from the app's
+    signed session/JWT). Client-supplied role headers are deliberately not trusted here.
+    """
     router = APIRouter(prefix="/approvals", tags=["approvals"])
 
     @router.get("")
-    def list_approvals(incident_id: str | None = None, status: ApprovalStatus | None = None) -> list[dict]:
-        return [a.model_dump(mode="json") for a in service.list(incident_id=incident_id, status=status)]
+    def list_approvals(
+        incident_id: str | None = None,
+        status: ApprovalStatus | None = None,
+        approver: Approver = Depends(current_approver),
+    ) -> list[dict]:
+        return [
+            a.model_dump(mode="json") for a in service.list(incident_id=incident_id, status=status)
+            if a.required_role == approver.role
+        ]
 
     @router.get("/{approval_id}")
-    def get_approval(approval_id: str) -> dict:
+    def get_approval(approval_id: str, approver: Approver = Depends(current_approver)) -> dict:
         try:
-            return service.get(approval_id).model_dump(mode="json")
+            approval = service.get(approval_id)
         except ApprovalNotFound:
             raise HTTPException(404, "approval not found")
+        if approval.required_role != approver.role:
+            raise HTTPException(404, "approval not found")
+        return approval.model_dump(mode="json")
 
     @router.post("/{approval_id}")
-    def decide(
+    async def decide(
         approval_id: str,
         body: DecisionRequest,
-        x_avera_user: str = Header(...),
-        x_avera_role: Role = Header(...),
+        approver: Approver = Depends(current_approver),
     ) -> dict:
         try:
             decided = service.decide(
                 approval_id,
                 decision=body.decision,
-                approver=Approver(id=x_avera_user, role=x_avera_role),
+                approver=approver,
                 payload_hash=body.payload_hash,
                 reason=body.reason,
             )
+            if after_decision is not None:
+                await after_decision()
         except ApprovalNotFound:
             raise HTTPException(404, "approval not found")
         except ApproverNotAuthorised as exc:

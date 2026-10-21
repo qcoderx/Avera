@@ -70,6 +70,11 @@ class BlastRadiusAgent:
 
         now = self._ports.clock.now()
         draft = select_playbook(handoff)
+        missing_scope = sorted(set(draft.impact_traits) - set(handoff.incident.fingerprint))
+        if missing_scope:
+            raise HandoffRejected(
+                "incident fingerprint is missing impact-scope traits: " + ", ".join(missing_scope)
+            )
         draft, simulation = self._simulate_containment(handoff, draft)
         eta_containment, eta_full = estimate(
             draft.steps, high_confidence=draft.known_fix and (simulation is None or simulation.passed)
@@ -158,6 +163,10 @@ class BlastRadiusAgent:
     ) -> None:
         plan, blast_radius = case.plan, case.blast_radius
         incident_id = plan.incident_id
+
+        # A code proposal is tied to the plan that produced it. Retire an older pending
+        # proposal before this plan can receive new decisions.
+        self._approvals.withdraw(incident_id=incident_id, subject_key=f"code:{incident_id}", requested_by=ACTOR)
 
         if draft.containment_change is not None and simulation is not None:
             config = ConfigChange(incident_id=incident_id, plan_id=plan.id, change=draft.containment_change,
