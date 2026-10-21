@@ -202,7 +202,6 @@ function mountMap(intro) {
   serviceMap.setTheme(state.theme);
   serviceMap.setStep(state.demoStep);
   serviceMap.mount(slot, { mode: slot.dataset.mapSlot, intro });
-  if (slot.dataset.mapSlot === 'full') updateMapInsets();
 }
 
 function overviewView() {
@@ -271,7 +270,25 @@ function agentForLabel(label) {
   return { Observability: 'observability', 'Ghost Test': 'ghost', 'Blast Radius': 'blast', Resolution: 'resolution' }[label] || 'observability';
 }
 
+function crowdCard() {
+  const map = mapState();
+  const { affected, complained, transactions, exposure } = fixture.impact;
+  const found = map.customers.affected >= 1 || map.customers.notified;
+  const facts = [
+    ['Customers sending to Bank X', formatNumber(affected)],
+    ['Complained', found ? formatNumber(complained) : map.customers.complainers ? 'Arriving' : 'None yet'],
+    ['Never complained', found ? formatNumber(affected - complained) : 'Not yet known'],
+    ['Affected transactions', found ? formatNumber(transactions) : 'Counting'],
+    ['Estimated exposure', found ? exposure : 'Counting'],
+  ];
+  return `<div class="node-card-head"><div class="node-glyph status-${found ? 'critical' : 'watch'}"><i></i></div><div><span>Customers</span><strong>Blast radius</strong></div><button data-map-action="reset" aria-label="Close details">${icon('close', 16)}</button></div>
+    <h3>${map.customers.caption}</h3>
+    <p>Each figure is one customer. The failure spreads outward from the epicentre; raised figures are the ones who complained.</p>
+    <dl>${facts.map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}</dl>`;
+}
+
 function nodeCard() {
+  if (state.selectedNode === 'crowd') return crowdCard();
   const node = fixture.nodes.find((item) => item.id === state.selectedNode);
   if (!node) return '';
   const map = mapState();
@@ -305,7 +322,6 @@ function mapView() {
   return `
     <h1 class="visually-hidden">Service map</h1>
     <section class="map-stage ${has3d ? '' : 'flat'}" data-reveal>
-      ${has3d ? '<div class="map3d-slot" data-map-slot="full"></div>' : `<div class="topology">${flatTopology()}</div>`}
       <div class="stage-top">
         <article class="stage-story">
           <div class="story-agent">${agentImage(insight.agent, agentForLabel(insight.label), `${insight.label} agent`)}</div>
@@ -317,7 +333,10 @@ function mapView() {
         </article>
         <ol class="stage-pipeline" aria-label="Avera agent pipeline">${fixture.pipeline.map((stage, index) => `<li class="${index < map.stage ? 'done' : index === map.stage ? 'active' : ''}"><i>${index < map.stage ? '✓' : index + 1}</i><div><strong>${stage.label}</strong><span>${stage.agent}</span></div></li>`).join('')}</ol>
       </div>
-      <aside class="stage-node ${state.selectedNode ? 'open' : ''}" aria-live="polite">${nodeCard()}</aside>
+      <div class="stage-canvas">
+        ${has3d ? '<div class="map3d-slot" data-map-slot="full"></div>' : `<div class="topology">${flatTopology()}</div>`}
+        <aside class="stage-node ${state.selectedNode ? 'open' : ''}" aria-live="polite">${nodeCard()}</aside>
+      </div>
       <div class="stage-bottom">
         <button class="stage-play" data-action="play" aria-label="${state.playing ? 'Pause story' : 'Play story'}">${icon(state.playing ? 'pause' : 'play', 18)}</button>
         <ol class="stage-timeline" style="--progress:${state.demoStep / last}">${fixture.demoSteps.map((item, index) => `<li><button class="${index < state.demoStep ? 'done' : ''} ${index === state.demoStep ? 'current' : ''}" data-step="${index}"><time>${item.time}</time><span>${item.label}</span></button></li>`).join('')}</ol>
@@ -325,24 +344,6 @@ function mapView() {
         ${mapLegend()}
       </div>
     </section>`;
-}
-
-// Tell the map how much of the stage the overlays cover, so it frames the board in the rest.
-function updateMapInsets() {
-  const stage = document.querySelector('.map-stage');
-  const top = stage?.querySelector('.stage-top');
-  const bottom = stage?.querySelector('.stage-bottom');
-  if (!serviceMap || !stage || !top || !bottom) return;
-  if (getComputedStyle(top).position === 'static') {
-    serviceMap.setInsets({});
-    return;
-  }
-  serviceMap.setInsets({
-    top: top.offsetTop + top.offsetHeight + 8,
-    bottom: stage.clientHeight - bottom.offsetTop + 8,
-    left: 8,
-    right: 8,
-  });
 }
 
 function hypothesesView() {
@@ -599,8 +600,6 @@ function bindEvents() {
     }, 180);
   });
 }
-
-window.addEventListener('resize', () => { if (state.view === 'map') updateMapInsets(); });
 
 document.addEventListener('keydown', (event) => {
   if (event.key.toLowerCase() === 'd' && !['INPUT', 'TEXTAREA'].includes(event.target.tagName)) setDemoOpen(!state.demoOpen);

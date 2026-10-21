@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import gsap from 'gsap';
 
 const STATUS_COLORS = {
@@ -25,6 +26,10 @@ const COLORS = {
   coral: new THREE.Color('#ff715b'),
   violet: new THREE.Color('#8178d8'),
   wine: new THREE.Color('#b01352'),
+  shirt: new THREE.Color('#d9432f'),
+  screenFail: new THREE.Color('#ff4d6d'),
+  screenWine: new THREE.Color('#ff2e7e'),
+  screenOk: new THREE.Color('#5ff5dc'),
 };
 
 const LANE_SHAPES = { channels: 'tile', services: 'tower', routes: 'hex', partners: 'vault' };
@@ -32,10 +37,10 @@ const SHAPE_HEIGHT = { tile: 0.5, tower: 0.92, hex: 0.72, vault: 1 };
 const S = 1.22;
 const VIEW_HEIGHT = 30;
 const CAMERA_DISTANCE = 90;
-const VIEW_DIRECTION = new THREE.Vector3(0, 0.82, 0.57).normalize();
+const VIEW_DIRECTION = new THREE.Vector3(0, 0.62, 0.78).normalize();
 const TWIN_LIFT = 8;
 const PARTICLE_COUNT = 150;
-const FIELD = { cols: 26, rows: 43, gap: 0.27, centerX: -25 };
+const FIELD = { centerX: -27.6, radius: 9.2, spacing: 0.52 };
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const format = new Intl.NumberFormat('en-NG');
 
@@ -254,9 +259,8 @@ export class ServiceMap {
   }
 
   layout() {
-    const half = { x: (FIELD.cols - 1) * FIELD.gap / 2, z: (FIELD.rows - 1) * FIELD.gap / 2 };
-    this.field = { ...FIELD, half, right: FIELD.centerX + half.x + 0.9 };
-    this.bounds = { minX: FIELD.centerX - half.x - 2, maxX: 18.6, minZ: -12.4, maxZ: 12.4 };
+    this.field = { ...FIELD, right: FIELD.centerX + FIELD.radius + 0.6 };
+    this.bounds = { minX: FIELD.centerX - FIELD.radius - 2.2, maxX: 18.6, minZ: -12.4, maxZ: 12.4 };
     this.boardCenter = new THREE.Vector3((this.bounds.minX + this.bounds.maxX) / 2, 0, 0);
   }
 
@@ -330,62 +334,106 @@ export class ServiceMap {
 
   buildCrowd() {
     const t = THEMES[this.theme];
-    const { cols, rows, gap, centerX, half } = this.field;
+    const { centerX, radius, spacing } = this.field;
     const { affected, complained } = this.fixture.impact;
     const random = seeded(1109);
 
     this.districtMat = new THREE.MeshStandardMaterial({ color: t.district, roughness: 0.9 });
-    const district = new THREE.Mesh(new RoundedBoxGeometry(half.x * 2 + 1.4, 0.16, half.z * 2 + 1.4, 3, 0.08), this.districtMat);
+    const district = new THREE.Mesh(new THREE.CylinderGeometry(radius + 0.9, radius + 1, 0.16, 96), this.districtMat);
     district.position.set(centerX, 0.08, 0);
     district.receiveShadow = true;
+    district.userData.nodeId = 'crowd';
+    this.district = district;
     this.scene.add(district);
 
-    const geometry = new THREE.CapsuleGeometry(0.075, 0.12, 3, 8);
-    geometry.translate(0, 0.135, 0);
-    this.crowdMat = new THREE.MeshStandardMaterial({ roughness: 0.6 });
-    this.crowd = new THREE.InstancedMesh(geometry, this.crowdMat, affected);
+    // The spreading failure: a coral ground disc with a bright front edge.
+    this.frontMat = new THREE.MeshBasicMaterial({ color: STATUS_COLORS.critical, transparent: true, opacity: 0, depthWrite: false });
+    this.frontDisc = new THREE.Mesh(new THREE.CircleGeometry(1, 96), this.frontMat);
+    this.frontEdgeMat = new THREE.MeshBasicMaterial({ color: STATUS_COLORS.critical, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+    this.frontEdge = new THREE.Mesh(new THREE.RingGeometry(0.975, 1, 128), this.frontEdgeMat);
+    [this.frontDisc, this.frontEdge].forEach((mesh, index) => {
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(centerX, 0.17 + index * 0.005, 0);
+      mesh.scale.setScalar(0.001);
+      this.scene.add(mesh);
+    });
+    this.blastRings = [1 / 3, 2 / 3, 1].map((share) => {
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.99, 1, 128), new THREE.MeshBasicMaterial({ color: STATUS_COLORS.critical, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(centerX, 0.18, 0);
+      ring.scale.setScalar(radius * share + 0.2);
+      this.scene.add(ring);
+      return ring;
+    });
+    this.front = 0;
+
+    // A person holding a phone: shirt and arms take the status colour, heads keep a
+    // skin tone, and the phone screen glows.
+    const torso = new THREE.CapsuleGeometry(0.11, 0.3, 4, 10).translate(0, 0.26, 0);
+    const arm = (side) => new THREE.CapsuleGeometry(0.032, 0.15, 3, 6).rotateX(-1.05).translate(side * 0.1, 0.4, 0.085);
+    const shirtGeometry = mergeGeometries([torso, arm(-1), arm(1)]);
+    const headGeometry = new THREE.SphereGeometry(0.078, 14, 12).translate(0, 0.62, 0);
+    const phoneGeometry = new THREE.BoxGeometry(0.13, 0.19, 0.025).rotateX(-0.45).translate(0, 0.44, 0.19);
+    // Darker base colours keep shirt and skin tones saturated under the bright studio light.
+    this.crowdMat = new THREE.MeshStandardMaterial({ color: '#b8b8b8', roughness: 0.65, envMapIntensity: 0.4 });
+    this.crowd = new THREE.InstancedMesh(shirtGeometry, this.crowdMat, affected);
+    this.heads = new THREE.InstancedMesh(headGeometry, new THREE.MeshStandardMaterial({ color: '#d0d0d0', roughness: 0.7, envMapIntensity: 0.4 }), affected);
+    this.phones = new THREE.InstancedMesh(phoneGeometry, new THREE.MeshBasicMaterial({ toneMapped: false }), affected);
     this.crowd.castShadow = true;
-    this.crowd.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.heads.castShadow = true;
+    [this.crowd, this.heads, this.phones].forEach((mesh) => mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage));
     this.crowdNeutral = new THREE.Color(t.crowd);
-    this.people = [];
+    this.screenIdle = new THREE.Color('#8ce8da');
+    const skins = ['#5c3a21', '#7a4a2a', '#8d5524', '#a86b3c', '#c68642', '#e0ac69'].map((hex) => new THREE.Color(hex));
+
+    // Phyllotaxis spiral: evenly packed disc, index order runs from the epicentre outward.
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    const spread = spacing * 0.53;
     const complainerSlots = new Set();
-    while (complainerSlots.size < complained) complainerSlots.add(Math.floor(random() * affected));
+    while (complainerSlots.size < complained) complainerSlots.add(Math.floor(random() * affected * 0.3));
+    this.people = [];
     for (let i = 0; i < affected; i += 1) {
-      const col = i % cols;
-      const row = Math.floor(i / cols);
+      const r = spread * Math.sqrt(i + 0.5);
+      const angle = i * golden;
       const complainer = complainerSlots.has(i);
       this.people.push({
-        x: centerX - half.x + col * gap + (random() - 0.5) * 0.06,
-        z: -half.z + row * gap + (random() - 0.5) * 0.06,
-        threshold: complainer ? random() * 0.25 : random(),
+        x: centerX + Math.cos(angle) * r,
+        z: Math.sin(angle) * r,
+        yaw: (random() - 0.5) * 1.1,
+        threshold: Math.min(0.999, (r / radius) * 0.94 + random() * 0.06),
         complainer,
         color: this.crowdNeutral.clone(),
+        screen: this.screenIdle.clone(),
         lift: 0,
         phase: random() * Math.PI * 2,
       });
       this.crowd.setColorAt(i, this.crowdNeutral);
+      this.heads.setColorAt(i, skins[Math.floor(random() * skins.length)]);
+      this.phones.setColorAt(i, this.screenIdle);
     }
-    this.scene.add(this.crowd);
+    this.scene.add(this.crowd, this.heads, this.phones);
     this.crowdTarget = { affected: 0, complainers: false, notified: false };
 
     this.complainerRings = [...complainerSlots].map((index) => {
       const person = this.people[index];
-      const ring = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.24, 24), new THREE.MeshBasicMaterial({ color: COLORS.wine, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.2, 0.25, 24), new THREE.MeshBasicMaterial({ color: COLORS.wine, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
       ring.rotation.x = -Math.PI / 2;
-      ring.position.set(person.x, 0.18, person.z);
+      ring.position.set(person.x, 0.19, person.z);
       this.scene.add(ring);
       return ring;
     });
 
     this.crowdLabel = label('map3d-crowd', '', [0.5, 1]);
-    this.crowdLabel.position.set(centerX, 0.2, -half.z - 0.5);
+    this.crowdLabel.position.set(centerX, 0.2, -radius - 1.1);
     this.scene.add(this.crowdLabel);
 
     const quotes = this.fixture.rawComplaints;
+    const spots = [[-0.6, -0.4], [0.15, -0.2], [-0.55, 0.3], [0.1, 0.45]];
     this.bubbles = quotes.map((text, index) => {
       const bubble = label('map3d-bubble', `<div class="map3d-card">${text}</div>`, [0.08, 1]);
       bubble.element.style.setProperty('--delay', `${index * 0.45}s`);
-      bubble.position.set(centerX - half.x + 0.4 + (index % 2) * 1.6, 0.9, -half.z + 1.6 + index * ((half.z * 2 - 2.4) / (quotes.length - 1)));
+      const [sx, sz] = spots[index % spots.length];
+      bubble.position.set(centerX + sx * radius, 0.9, sz * radius);
       this.scene.add(bubble);
       return bubble;
     });
@@ -476,7 +524,7 @@ export class ServiceMap {
       const b = this.nodes.get(to);
       const end = b.home.clone().setY(b.height + 0.18);
       const start = from === 'crowd'
-        ? new THREE.Vector3(this.field.right, 0.3, b.home.z)
+        ? new THREE.Vector3(this.field.centerX + Math.sqrt(Math.max(0, this.field.radius ** 2 - b.home.z ** 2)) + 0.4, 0.3, b.home.z)
         : this.nodes.get(from).home.clone().setY(this.nodes.get(from).height + 0.18);
       const dist = start.distanceTo(end);
       const curve = arc(start, end, 0.6 + dist * 0.12 + (kind === 'reroute' ? 1.4 : 0));
@@ -593,7 +641,7 @@ export class ServiceMap {
     this.blastMat = new THREE.MeshBasicMaterial({ color: STATUS_COLORS.critical, map: blastTexture, transparent: true, opacity: 0, depthWrite: false });
     this.blast = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.blastMat);
     this.blast.rotation.x = -Math.PI / 2;
-    this.blast.position.copy(this.nodes.get('bankx').home).setY(0.05);
+    this.blast.position.set(this.field.centerX, 0.2, 0);
     this.scene.add(this.blast);
 
     const reroute = this.edges.get('gc>bankx');
@@ -680,7 +728,7 @@ export class ServiceMap {
         if (!rect.width || !rect.height) return;
         const base = { left: rect.left - entry.offset.x, top: rect.top - entry.offset.y, width: rect.width, height: rect.height };
         const candidates = [entry.target, { x: 0, y: 0 }];
-        const steps = entry.kind === 'node' ? [-12, -24, -36, -48, -62, -78, -96, -116, -140] : [-14, 14, -28, 28, -44, 44, -62, 62, -84, 84];
+        const steps = entry.kind === 'node' ? [-12, -24, -36, -48, -62, -78, -96, -116, -140, 16, 32, 48] : [-14, 14, -28, 28, -44, 44, -62, 62, -84, 84];
         const sideways = entry.kind === 'node' ? [0, -40, 40, -80, 80] : [0, -60, 60];
         sideways.forEach((x) => steps.forEach((y) => candidates.push({ x, y })));
         if (entry.kind === 'node') sideways.slice(1).forEach((x) => candidates.splice(2, 0, { x, y: 0 }));
@@ -1040,13 +1088,14 @@ export class ServiceMap {
 
   // Zoom in on a component the viewer clicked, keeping the same straight angle.
   zoomTo(id) {
+    const crowd = id === 'crowd';
     const node = this.nodes.get(id);
-    if (!node) return;
+    if (!node && !crowd) return;
     this.select(id);
     this.onSelect?.(id);
-    const target = node.home.clone();
+    const target = crowd ? new THREE.Vector3(this.field.centerX, 0, 0) : node.home.clone();
     this.userMoved = true;
-    this.fly({ position: target.clone().addScaledVector(VIEW_DIRECTION, CAMERA_DISTANCE), target, zoom: this.homeView().zoom * 2.2 });
+    this.fly({ position: target.clone().addScaledVector(VIEW_DIRECTION, CAMERA_DISTANCE), target, zoom: this.homeView().zoom * (crowd ? 1.9 : 2.2) });
   }
 
   focusSuspect() {
@@ -1103,7 +1152,7 @@ export class ServiceMap {
     else this.controls.update();
 
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = this.raycaster.intersectObjects([...this.nodes.values()].flatMap((node) => node.pickables), false);
+    const hits = this.raycaster.intersectObjects([...[...this.nodes.values()].flatMap((node) => node.pickables), this.district], false);
     const hovered = hits[0]?.object.userData.nodeId || null;
     if (hovered !== this.hovered) {
       this.hovered = hovered;
@@ -1179,23 +1228,49 @@ export class ServiceMap {
 
   updateCrowd(dt, time) {
     const target = this.crowdTarget;
-    const blend = Math.min(1, dt * 2.2);
+    const { radius } = this.field;
+    const blend = reducedMotion ? 1 : Math.min(1, dt * 2.2);
+    this.front += (target.affected - this.front) * Math.min(1, dt * (reducedMotion ? 60 : 1.1));
+    const notified = target.notified;
+    const yAxis = new THREE.Vector3(0, 1, 0);
     this.people.forEach((person, index) => {
-      const affected = person.threshold < target.affected;
-      const complaining = person.complainer && target.complainers;
-      const goal = target.notified ? COLORS.teal : complaining ? COLORS.wine : affected ? COLORS.coral : this.crowdNeutral;
+      const affected = person.threshold < this.front;
+      const complaining = person.complainer && target.complainers && !notified;
+      const goal = notified ? COLORS.teal : complaining ? COLORS.wine : affected ? COLORS.shirt : this.crowdNeutral;
+      const screenGoal = notified ? COLORS.screenOk : complaining ? COLORS.screenWine : affected ? COLORS.screenFail : this.screenIdle;
       person.color.lerp(goal, blend);
-      person.lift += ((complaining ? 0.42 + Math.sin(time * 3 + person.phase) * 0.08 : 0) - person.lift) * blend;
-      const scale = complaining ? 1.7 : 1;
-      this.tmpPos.set(person.x, Math.max(0.16, 0.16 + person.lift), person.z);
-      this.tmpScale.setScalar(scale);
+      person.screen.lerp(screenGoal, blend);
+      person.lift += ((complaining ? 0.22 + Math.abs(Math.sin(time * 4 + person.phase)) * 0.12 : 0) - person.lift) * blend;
+      this.tmpPos.set(person.x, 0.16 + person.lift, person.z);
+      this.tmpQuat.setFromAxisAngle(yAxis, person.yaw);
+      this.tmpScale.setScalar(complaining ? 1.25 : 1);
       this.tmpMatrix.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
       this.crowd.setMatrixAt(index, this.tmpMatrix);
+      this.heads.setMatrixAt(index, this.tmpMatrix);
+      this.phones.setMatrixAt(index, this.tmpMatrix);
       this.crowd.setColorAt(index, person.color);
+      this.phones.setColorAt(index, person.screen);
     });
-    this.crowd.instanceMatrix.needsUpdate = true;
-    this.crowd.instanceColor.needsUpdate = true;
-    const ringOpacity = target.complainers && !target.notified ? 0.75 : 0;
+    this.tmpQuat.identity();
+    [this.crowd, this.phones].forEach((mesh) => {
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.instanceColor.needsUpdate = true;
+    });
+    this.heads.instanceMatrix.needsUpdate = true;
+
+    const tone = notified ? COLORS.teal : COLORS.coral;
+    const spread = Math.max(0.001, this.front * radius * 1.04 + (this.front > 0.01 ? 0.3 : 0));
+    this.frontDisc.scale.setScalar(spread);
+    this.frontEdge.scale.setScalar(spread);
+    this.frontMat.color.copy(tone);
+    this.frontEdgeMat.color.copy(tone);
+    this.frontMat.opacity += (((this.front > 0.01 ? (notified ? 0.07 : 0.13) : 0)) - this.frontMat.opacity) * blend;
+    this.frontEdgeMat.opacity += (((this.front > 0.01 && this.front < 0.98 && !notified) ? 0.75 + Math.sin(time * 5) * 0.2 : 0) - this.frontEdgeMat.opacity) * blend;
+    this.blastRings.forEach((ring) => {
+      ring.material.opacity += (this.blastLevel * 0.55 - ring.material.opacity) * blend;
+    });
+
+    const ringOpacity = target.complainers && !notified ? 0.5 : 0;
     this.complainerRings.forEach((ring, index) => {
       const phase = (time * 0.7 + index * 0.13) % 1;
       ring.material.opacity += ((ringOpacity * (1 - phase)) - ring.material.opacity) * 0.3;
@@ -1276,8 +1351,8 @@ export class ServiceMap {
       spark.mat.opacity = (1 - spark.life) * 0.9;
     });
     const phase = (time * 0.36) % 1;
-    this.blast.scale.setScalar(1 + phase * 15);
-    this.blastMat.opacity = this.blastLevel * (1 - phase) * 0.5;
+    this.blast.scale.setScalar(1 + phase * (this.field.radius + 1.5) * 2.2);
+    this.blastMat.opacity = this.blastLevel * (1 - phase) * 0.6;
   }
 
   updateMascots(dt, time) {

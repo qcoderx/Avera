@@ -1050,10 +1050,11 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 
 /* Map stage: the 3D story fills the card, narrative floats over it */
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.map-stage { position: relative; height: max(700px, calc(100vh - 78px - 52px)); border: 1px solid color-mix(in srgb, var(--mocha) 22%, var(--line)); border-radius: 26px; background: radial-gradient(ellipse 75% 70% at 55% 55%, var(--white) 0%, color-mix(in srgb, var(--soft) 78%, var(--white)) 100%); overflow: hidden; box-shadow: inset 0 1px 0 var(--white), 0 5px 0 var(--card-under), 0 17px 34px var(--card-shadow); }
+.map-stage { position: relative; display: flex; flex-direction: column; gap: 12px; padding: 14px; height: max(720px, calc(100vh - 78px - 52px)); border: 1px solid color-mix(in srgb, var(--mocha) 22%, var(--line)); border-radius: 26px; background: radial-gradient(ellipse 75% 70% at 55% 55%, var(--white) 0%, color-mix(in srgb, var(--soft) 78%, var(--white)) 100%); overflow: hidden; box-shadow: inset 0 1px 0 var(--white), 0 5px 0 var(--card-under), 0 17px 34px var(--card-shadow); }
+.stage-canvas { position: relative; flex: 1 1 auto; min-height: 0; border: 1px solid color-mix(in srgb, var(--mocha) 12%, var(--line)); border-radius: 20px; background: radial-gradient(ellipse 75% 70% at 55% 55%, var(--white) 0%, color-mix(in srgb, var(--soft) 60%, var(--white)) 100%); overflow: hidden; }
 .map-stage .map3d-slot { position: absolute; inset: 0; height: auto; background: none; }
 .map-stage.flat .topology { position: absolute; inset: 0; min-height: 0; }
-.stage-top { position: absolute; z-index: 3; top: 16px; left: 16px; right: 16px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; pointer-events: none; }
+.stage-top { position: relative; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .stage-story, .stage-pipeline, .stage-node, .stage-timeline { border: 1px solid color-mix(in srgb, var(--mocha) 16%, var(--line)); background: var(--glass); backdrop-filter: blur(14px); box-shadow: 0 4px 0 var(--card-under), 0 16px 34px var(--card-shadow); }
 .stage-story { pointer-events: auto; flex: 1 1 auto; min-width: 0; max-width: 640px; display: grid; grid-template-columns: 58px 1fr; align-items: center; gap: 12px; padding: 12px 18px 12px 8px; border-radius: 18px; animation: storyIn .7s cubic-bezier(.2, .8, .2, 1) both; }
 .story-agent .agent-image { width: 62px; }
@@ -1061,7 +1062,7 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 .story-kicker i { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; background: linear-gradient(160deg, var(--wine-bright), var(--wine)); color: #fff; font-size: 10px; font-style: normal; box-shadow: 0 2px 0 var(--wine-deep); }
 .stage-story h2 { margin-top: 5px; font-size: clamp(16px, 1.35vw, 20px); line-height: 1.15; letter-spacing: -.03em; }
 .stage-story p { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.45; }
-.stage-pipeline { pointer-events: auto; display: flex; gap: 2px; margin: 0; padding: 6px; border-radius: 16px; list-style: none; }
+.stage-pipeline { pointer-events: auto; display: flex; align-items: center; gap: 2px; margin: 0; padding: 6px; border-radius: 16px; list-style: none; }
 .stage-pipeline li { position: relative; display: flex; align-items: center; gap: 7px; padding: 7px 10px 7px 7px; border-radius: 11px; opacity: .5; transition: opacity .4s ease, background .4s ease; }
 .stage-pipeline li i { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--soft); color: var(--muted); font-size: 10px; font-style: normal; font-weight: 800; }
 .stage-pipeline strong { display: block; font-size: 11px; }
@@ -1071,7 +1072,7 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 .stage-pipeline li.active { opacity: 1; background: var(--wine-pale); }
 .stage-pipeline li.active i { background: var(--wine); color: #fff; animation: winePulse 1.6s ease-out infinite; }
 .stage-pipeline li.active strong { color: var(--wine); }
-.stage-node { position: absolute; z-index: 4; right: 16px; top: 128px; width: 310px; padding: 16px; border-radius: 18px; opacity: 0; transform: translateX(24px) scale(.98); pointer-events: none; transition: opacity .35s ease, transform .45s cubic-bezier(.2, .9, .3, 1.15); }
+.stage-node { position: absolute; z-index: 4; right: 14px; top: 14px; width: 310px; padding: 16px; border-radius: 18px; opacity: 0; transform: translateX(24px) scale(.98); pointer-events: none; transition: opacity .35s ease, transform .45s cubic-bezier(.2, .9, .3, 1.15); }
 .stage-node.open { opacity: 1; transform: none; pointer-events: auto; }
 .node-card-head { display: grid; grid-template-columns: 50px 1fr 30px; align-items: center; gap: 11px; }
 .node-card-head .node-glyph { width: 50px; height: 50px; border-radius: 14px; }
@@ -1085,7 +1086,7 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 .stage-node dl div { display: grid; gap: 2px; padding: 8px 0; border-top: 1px solid var(--line); }
 .stage-node dt { color: var(--muted); font-size: 9px; }
 .stage-node dd { margin: 0; font-size: 11.5px; font-weight: 650; line-height: 1.4; }
-.stage-bottom { position: absolute; z-index: 3; left: 16px; right: 16px; bottom: 16px; display: flex; align-items: center; gap: 12px; pointer-events: none; }
+.stage-bottom { position: relative; z-index: 3; display: flex; align-items: center; gap: 12px; }
 .stage-bottom > * { pointer-events: auto; }
 .stage-play { flex: 0 0 auto; width: 50px; height: 50px; display: grid; place-items: center; border-radius: 15px; background: linear-gradient(160deg, var(--wine-bright), var(--wine)); color: #fff; box-shadow: 0 4px 0 var(--wine-deep), 0 12px 24px rgba(176, 19, 82, .3); transition: transform .18s ease; }
 .stage-play:hover { transform: translateY(-2px); }
@@ -1220,21 +1221,19 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 @media (max-width: 1080px) {
   .stage-top { flex-direction: column; }
   .stage-story { width: 100%; max-width: none; }
-  .stage-node { top: 210px; }
   .map-controls button { padding: 0 10px; }
 }
 
 @media (max-width: 760px) {
-  .map-stage { height: auto; min-height: 0; display: flex; flex-direction: column; }
-  .map-stage .map3d-slot, .map-stage.flat .topology { position: relative; inset: auto; height: 440px; order: 2; }
-  .stage-top, .stage-bottom { position: static; padding: 12px; }
-  .stage-top { order: 1; }
-  .stage-bottom { order: 3; flex-wrap: wrap; }
+  .map-stage { height: auto; min-height: 0; padding: 10px; }
+  .stage-canvas { flex: 0 0 440px; }
+  .stage-top { flex-direction: column; }
+  .stage-bottom { flex-wrap: wrap; }
   .stage-story { width: 100%; grid-template-columns: 52px 1fr; }
   .story-agent .agent-image { width: 54px; }
   .stage-pipeline { width: 100%; overflow-x: auto; }
   .stage-pipeline li { flex: 0 0 auto; }
-  .stage-node { top: auto; bottom: 150px; left: 12px; right: 12px; width: auto; }
+  .stage-node { top: auto; bottom: 10px; left: 10px; right: 10px; width: auto; max-height: calc(100% - 20px); overflow: auto; }
   .stage-timeline time { display: none; }
   .stage-timeline span { font-size: 8.5px; }
   .stage-bottom .map-controls { width: 100%; }
