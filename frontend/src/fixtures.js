@@ -55,6 +55,75 @@ export const fixture = {
   edges: [
     ['app', 'api'], ['ussd', 'api'], ['api', 'core'], ['api', 'router'], ['core', 'router'],
     ['router', 'ga'], ['router', 'gb'], ['router', 'gc'], ['ga', 'banky'], ['gb', 'bankx'], ['gc', 'bankz'],
+    ['gc', 'bankx', 'reroute'],
+  ],
+  lanes: [
+    { id: 'channels', label: 'Channels', nodes: ['app', 'ussd'] },
+    { id: 'services', label: 'Bank services', nodes: ['api', 'core', 'router'] },
+    { id: 'routes', label: 'Payment routes', nodes: ['ga', 'gb', 'gc'] },
+    { id: 'partners', label: 'Partners', nodes: ['bankx', 'banky', 'bankz'] },
+  ],
+  flows: [
+    { path: ['app', 'api', 'router', 'gb', 'bankx'], weight: 4, failing: true, rerouted: ['app', 'api', 'router', 'gc', 'bankx'] },
+    { path: ['ussd', 'api', 'router', 'gb', 'bankx'], weight: 1, failing: true, rerouted: ['ussd', 'api', 'router', 'gc', 'bankx'] },
+    { path: ['app', 'api', 'router', 'ga', 'banky'], weight: 3 },
+    { path: ['ussd', 'api', 'router', 'gc', 'bankz'], weight: 2 },
+    { path: ['app', 'api', 'core'], weight: 2 },
+    { path: ['core', 'router', 'ga', 'banky'], weight: 1 },
+    { path: ['router', 'gb', 'bankx'], weight: 2, probe: true },
+    { path: ['router', 'gc', 'bankz'], weight: 2, probe: true },
+  ],
+  // One entry per demo step: how the service map looks at that moment of the story.
+  mapStates: [
+    {
+      status: {},
+      metrics: { gb: '41 ms', bankx: '33 ms', router: '24 ms' },
+      tags: {},
+      failing: false, probes: false, blast: false, reroute: 'hidden', release: false,
+      insight: { agent: 'listening', label: 'Listening', title: 'Every route is healthy', body: 'Synthetic transfers flow through all three gateways. Avera is listening to every channel and service.', facts: [['Routes monitored', '3 gateways'], ['Partner banks', '3 healthy'], ['Open incidents', 'None']] },
+    },
+    {
+      status: {},
+      metrics: { gb: '43 ms', bankx: '33 ms', router: '25 ms' },
+      tags: {},
+      failing: true, probes: false, blast: false, reroute: 'hidden', release: true,
+      insight: { agent: 'listening', label: 'Listening', title: 'Nothing has been announced', body: 'Gateway B quietly stops acknowledging Bank X transfers while app v4.2 ships at the same moment.', facts: [['Recent change', 'App v4.2'], ['Alerts raised', '0'], ['Customer reports', 'Arriving']] },
+    },
+    {
+      status: { gb: 'critical', bankx: 'critical', router: 'watch', app: 'suspect', core: 'suspect' },
+      metrics: {},
+      tags: { gb: 'H1', bankx: 'H2', app: 'H3', core: 'H4' },
+      failing: true, probes: false, blast: false, reroute: 'hidden', release: true,
+      insight: { agent: 'working', label: 'Observability', title: 'Four suspect zones marked', body: 'Complaints, retries, USSD switching and route timeouts were fused into one incident. Every plausible zone is marked, including the app release.', facts: [['Affected route share', '92%'], ['Timeout start', '10:42'], ['Recent change', 'App v4.2', 'Decoy under test']] },
+    },
+    {
+      status: { gb: 'critical', bankx: 'critical', router: 'watch', app: 'suspect', core: 'suspect' },
+      metrics: {},
+      tags: { gb: 'H1 · testing', bankx: 'H2 · testing', app: 'H3 · testing', core: 'H4 · testing' },
+      failing: true, probes: true, blast: false, reroute: 'hidden', release: true,
+      insight: { agent: 'working', label: 'Ghost Test', title: 'Ghost probes run in the twin', body: 'Synthetic transfers run through Gateway B and through the healthy Gateway C control. No customer data or funds are used.', facts: [['Tests running', '15'], ['Suspect route', '5 of 5 failed'], ['Healthy control', '0 of 5 failed']] },
+    },
+    {
+      status: { gb: 'critical', bankx: 'critical', router: 'watch', app: 'cleared', core: 'cleared' },
+      metrics: {},
+      tags: { gb: 'H1 · 96%', bankx: 'H2 · 21%', app: 'H3 · 9%', core: 'H4 · 6%' },
+      failing: true, probes: false, blast: true, reroute: 'hidden', release: true,
+      insight: { agent: 'result', label: 'Blast Radius', title: 'Failure follows one route', body: 'H1 survived every disproof check. The app release was ruled out. The blast radius reaches 1,109 customers, and 1,096 of them never complained.', facts: [['Validated cause', 'H1 · 96%'], ['Affected customers', '1,109'], ['Had not complained', '1,096']] },
+    },
+    {
+      status: { gb: 'critical', bankx: 'critical', router: 'watch', gc: 'proposed' },
+      metrics: {},
+      tags: { gb: 'H1 · 96%', gc: 'Reroute target' },
+      failing: true, probes: false, blast: true, reroute: 'proposed', release: false,
+      insight: { agent: 'listening', label: 'Resolution', title: 'Reroute waits for an engineer', body: 'Bank X traffic can move to Gateway C. The digital twin shows 96.7% success. Nothing changes in production until it is approved.', facts: [['Simulated success', '96.7%'], ['Containment ETA', '10 minutes'], ['Rollback trigger', 'Gateway C errors > 2%']] },
+    },
+    {
+      status: { gb: 'patching' },
+      metrics: { gb: 'Patch in review', bankx: '34 ms', gc: '99.8%' },
+      tags: { gb: 'Patch in review', gc: 'Carrying Bank X' },
+      failing: false, probes: false, blast: false, reroute: 'active', release: false,
+      insight: { agent: 'result', label: 'Resolution', title: 'Traffic rerouted and verified', body: 'Bank X transfers now flow through Gateway C. The Ghost Tests were rerun and passed. The connector patch is open for engineer review.', facts: [['Ghost Test rerun', 'Passed'], ['Bank X success', '99.8%'], ['Incident memory', 'Saved']] },
+    },
   ],
   hypotheses: [
     {
