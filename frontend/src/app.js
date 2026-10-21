@@ -1,18 +1,45 @@
 import './styles.css';
 import { fixture } from './fixtures.js';
+import { ServiceMap, webglAvailable } from './three/serviceMap.js';
+import { bindTilt, leaveView, revealView } from './motion.js';
 
 const app = document.querySelector('#app');
+const params = new URLSearchParams(window.location.search);
 
 const state = {
-  view: new URLSearchParams(window.location.search).get('view') || 'overview',
-  demoStep: 4,
+  view: params.get('view') || 'overview',
+  demoStep: Math.max(0, Math.min(Number(params.get('step') ?? 4), fixture.demoSteps.length - 1)),
   playing: false,
+  demoOpen: false,
   approvals: Object.fromEntries(fixture.approvals.map((item) => [item.id, item.status])),
   activeApproval: fixture.approvals[0].id,
-  loading: false,
+  loading: true,
   theme: 'light',
   memoryQuery: '',
+  selectedNode: null,
 };
+
+const has3d = webglAvailable();
+let serviceMap = null;
+let lastView = null;
+
+const statusLabels = {
+  healthy: 'Healthy',
+  watch: 'Watch',
+  critical: 'Suspect zone',
+  suspect: 'Hypothesis under test',
+  cleared: 'Ruled out',
+  proposed: 'Reroute target',
+  patching: 'Patch in review',
+};
+
+function mapState() {
+  return fixture.mapStates[state.demoStep];
+}
+
+function nodeStatus(id) {
+  return mapState().status[id] || 'healthy';
+}
 
 const navItems = [
   ['overview', 'System health', 'pulse', 'Live health, active incidents and agent activity.'],
@@ -45,6 +72,8 @@ const iconPaths = {
   arrow: '<path d="m9 18 6-6-6-6"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/>',
+  focus: '<circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
+  orbit: '<ellipse cx="12" cy="12" rx="9" ry="4"/><path d="M12 3a9 4 90 0 1 0 18"/><circle cx="12" cy="12" r="1.5"/>',
 };
 
 function icon(name, size = 20) {
@@ -102,7 +131,7 @@ function shell(content) {
           <div class="breadcrumb"><span>Incident command centre</span>${icon('arrow', 14)}<strong>${current[1]}</strong></div>
           <div class="top-actions">
             <div class="stream-status"><i></i> Fixture stream <span>live</span></div>
-            <button class="demo-trigger" data-action="demo-panel"><span class="demo-dot"></span>${step.label}<kbd>D</kbd></button>
+            <button class="demo-trigger" data-action="demo-panel"><span class="demo-dot"></span><span class="demo-step-no">${String(state.demoStep + 1).padStart(2, '0')}</span>${step.label}<kbd>D</kbd></button>
           </div>
         </header>
         <main class="main-content ${state.loading ? 'is-loading' : ''}" id="main-content">${content}</main>
@@ -122,7 +151,7 @@ function pageHeader(title, description, extra = '') {
 
 function demoPanel() {
   const step = fixture.demoSteps[state.demoStep];
-  return `<aside class="demo-panel" aria-label="Demo controller">
+  return `<aside class="demo-panel ${state.demoOpen ? 'open' : ''}" aria-label="Demo controller">
     <div class="demo-panel-head"><div><span>Fixture replay</span><strong>${step.title}</strong></div><button data-action="demo-panel" aria-label="Close demo controller">${icon('close')}</button></div>
     <div class="demo-track">${fixture.demoSteps.map((item, index) => `<button class="demo-stage ${index <= state.demoStep ? 'complete' : ''} ${index === state.demoStep ? 'current' : ''}" data-step="${index}"><i>${index + 1}</i><span>${item.label}</span></button>`).join('')}</div>
     <div class="demo-transport"><button data-action="reset">${icon('reset')} Reset</button><button class="transport-primary" data-action="play">${icon(state.playing ? 'pause' : 'play')} ${state.playing ? 'Pause' : 'Play sequence'}</button><button data-action="next">Next ${icon('arrow')}</button></div>
@@ -146,6 +175,33 @@ function render() {
   const content = state.loading ? loadingView() : views[state.view]();
   app.innerHTML = shell(content);
   bindEvents();
+  const entering = !state.loading && lastView !== state.view;
+  mountMap(entering);
+  if (!state.loading) {
+    lastView = state.view;
+    if (entering) revealView(document.querySelector('#main-content'));
+    bindTilt(app);
+  }
+}
+
+function mountMap(intro) {
+  const slot = document.querySelector('[data-map-slot]');
+  if (!slot) {
+    serviceMap?.sleep();
+    return;
+  }
+  if (!serviceMap) {
+    serviceMap = new ServiceMap(fixture, {
+      onSelect: (id) => {
+        if (state.view !== 'map' || state.selectedNode === id) return;
+        state.selectedNode = id;
+        updateNodeCard();
+      },
+    });
+  }
+  serviceMap.setTheme(state.theme);
+  serviceMap.setStep(state.demoStep);
+  serviceMap.mount(slot, { mode: slot.dataset.mapSlot, intro });
 }
 
 function overviewView() {
@@ -153,11 +209,11 @@ function overviewView() {
   const healthy = state.demoStep < 2;
   return `
     ${pageHeader('System health', 'Live operational state across channels, services and active incidents.', `<div class="incident-chip ${healthy ? 'nominal' : ''}"><i></i>${healthy ? fixture.health.nominalLabel : `${fixture.incident.severity} · ${fixture.incident.id}`}</div>`)}
-    <section class="overview-theatre">
+    <section class="overview-theatre" data-reveal>
       <div class="health-stage">
         <div class="stage-topline"><span>${healthy ? 'Bank-wide availability' : 'Active incident'}</span><time>${healthy ? 'Updated now' : `Open ${fixture.incident.elapsed}`}</time></div>
         <div class="incident-title">
-          <div class="health-orbit ${healthy ? 'healthy' : ''}"><span>${healthy ? '99.98' : fixture.hypotheses[0].confidence}<small>%</small></span><i></i><b></b></div>
+          <div class="health-orbit ${healthy ? 'healthy' : ''}"><em class="ring r1"><b></b></em><em class="ring r2"><b></b></em><em class="ring r3"><b></b></em><div class="orbit-core"><span>${healthy ? '<span data-count="99.98" data-decimals="2">99.98</span>' : `<span data-count="${fixture.hypotheses[0].confidence}">${fixture.hypotheses[0].confidence}</span>`}<small>%</small></span></div></div>
           <div><h2>${healthy ? fixture.health.nominalLabel : fixture.incident.title}</h2><p>${healthy ? 'Synthetic traffic is flowing normally across every monitored route.' : 'Avera connected customer reports, retries, channel switching and route-level timeouts into one incident.'}</p></div>
         </div>
         <div class="stage-metrics">
@@ -174,41 +230,119 @@ function overviewView() {
       </div>
       <aside class="signal-rail">
         <div class="rail-head"><span>Live incident feed</span><i>Streaming</i></div>
-        <div class="signal-list">${fixture.signals.slice(0, state.demoStep < 2 ? 2 : 7).reverse().map((signal, index) => `<article class="signal ${index === 0 ? 'latest' : ''}"><time>${signal.time}</time><i class="tone-${signal.tone}"></i><div><span>${signal.channel}</span><p>${signal.text}</p></div></article>`).join('')}</div>
+        <div class="signal-list" data-stagger>${fixture.signals.slice(0, state.demoStep < 2 ? 2 : 7).reverse().map((signal, index) => `<article class="signal ${index === 0 ? 'latest' : ''}"><time>${signal.time}</time><i class="tone-${signal.tone}"></i><div><span>${signal.channel}</span><p>${signal.text}</p></div></article>`).join('')}</div>
         <button class="text-button" data-view="timeline">Open incident timeline ${icon('arrow', 16)}</button>
       </aside>
     </section>
-    <section class="service-strip" aria-label="Service health">
+    <section class="overview-map" data-reveal>
+      <div class="overview-map-head">
+        <div><span>Live topology</span><strong>${step.title}</strong></div>
+        ${mapLegend()}
+        <button class="text-button" data-view="map">Open service map ${icon('arrow', 16)}</button>
+      </div>
+      ${has3d ? '<div class="map3d-slot" data-map-slot="compact"></div>' : `<div class="topology compact">${flatTopology()}</div>`}
+    </section>
+    <section class="service-strip" aria-label="Service health" data-reveal data-stagger>
       ${fixture.health.services.map((service) => `<div class="service-reading"><i class="${service.state}"></i><span>${service.name}</span><strong>${service.value}%</strong><small>${service.delta}</small></div>`).join('')}
     </section>
-    <section class="agent-dock">
+    <section class="agent-dock" data-reveal>
       <div class="dock-copy"><span>Agent activity</span><p>Four accountable agents. Every handoff carries evidence.</p></div>
-      ${fixture.agents.map((agent) => `<button class="agent-mini" data-view="states" style="--agent:${agent.color}">${agentImage(agent.status, agent.id, `${agent.name} agent`)}<div><span>${agent.name}</span><strong>${agent.state}</strong><small>${agent.detail}</small></div></button>`).join('')}
+      ${fixture.agents.map((agent) => `<button class="agent-mini" data-view="states" data-tilt="7" style="--agent:${agent.color}">${agentImage(agent.status, agent.id, `${agent.name} agent`)}<div><span>${agent.name}</span><strong>${agent.state}</strong><small>${agent.detail}</small></div></button>`).join('')}
     </section>`;
 }
 
-function mapView() {
+function mapLegend() {
+  return `<div class="legend"><span><i class="healthy"></i>Healthy</span><span><i class="watch"></i>Watch</span><span><i class="critical"></i>Suspect</span><span><i class="hypothesis"></i>Hypothesis</span><span><i class="probe"></i>Ghost probe</span></div>`;
+}
+
+function flatTopology() {
   const byId = Object.fromEntries(fixture.nodes.map((node) => [node.id, node]));
+  const map = mapState();
   return `
-    ${pageHeader('Service map', 'Live dependencies with suspect zones, route health and recent changes.', `<div class="legend"><span><i class="healthy"></i>Healthy</span><span><i class="watch"></i>Watch</span><span><i class="critical"></i>Suspect</span></div>`)}
-    <section class="map-layout">
-      <div class="topology">
-        <div class="map-labels"><span>Channels</span><span>Bank services</span><span>Payment routes</span><span>Partners</span></div>
-        <svg class="map-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          ${fixture.edges.map(([from, to]) => { const a = byId[from], b = byId[to]; const suspect = from === 'gb' || to === 'gb' || to === 'bankx'; return `<path class="${suspect ? 'suspect-edge' : ''}" d="M ${a.x} ${a.y} C ${(a.x+b.x)/2} ${a.y}, ${(a.x+b.x)/2} ${b.y}, ${b.x} ${b.y}"/>`; }).join('')}
-        </svg>
-        ${fixture.nodes.map((node) => `<button class="map-node ${node.status}" style="--x:${node.x}%;--y:${node.y}%"><i></i><span>${node.name}</span><small>${node.metric}</small>${node.status === 'critical' ? '<b>Suspect zone</b>' : ''}</button>`).join('')}
-        <div class="route-agent r1">${agentImage('working', 'observability', '')}</div>
-        <div class="route-agent r2">${agentImage('working', 'ghost', '')}</div>
-        <div class="route-agent r3">${agentImage('working', 'blast', '')}</div>
+    <div class="map-labels">${fixture.lanes.filter((lane) => lane.nodes.length).map((lane) => `<span>${lane.label}</span>`).join('')}</div>
+    <svg class="map-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      ${fixture.edges.filter(([from, to, kind]) => byId[from] && byId[to] && (kind !== 'reroute' || map.reroute !== 'hidden')).map(([from, to, kind]) => { const a = byId[from], b = byId[to]; const suspect = from === 'gb' && to === 'bankx' && map.bug === 'alert'; return `<path class="${suspect ? 'suspect-edge' : ''} ${kind === 'reroute' ? `reroute-edge ${map.reroute}` : ''}" d="M ${a.x} ${a.y} C ${(a.x+b.x)/2} ${a.y}, ${(a.x+b.x)/2} ${b.y}, ${b.x} ${b.y}"/>`; }).join('')}
+    </svg>
+    ${fixture.nodes.map((node) => { const tag = map.hypotheses[node.id]?.id || map.tags[node.id]; return `<div class="map-node ${nodeStatus(node.id)}" style="--x:${node.x}%;--y:${node.y}%"><i></i><span>${node.name}</span><small>${map.metrics[node.id] || node.metric}</small>${tag ? `<b>${tag}</b>` : ''}</div>`; }).join('')}`;
+}
+
+function agentForLabel(label) {
+  return { Observability: 'observability', 'Ghost Test': 'ghost', 'Blast Radius': 'blast', Resolution: 'resolution' }[label] || 'observability';
+}
+
+function crowdCard() {
+  const map = mapState();
+  const { affected, complained, transactions, exposure } = fixture.impact;
+  const found = map.customers.affected >= 1 || map.customers.notified;
+  const facts = [
+    ['Customers sending to Bank X', formatNumber(affected)],
+    ['Complained', found ? formatNumber(complained) : map.customers.complainers ? 'Arriving' : 'None yet'],
+    ['Never complained', found ? formatNumber(affected - complained) : 'Not yet known'],
+    ['Affected transactions', found ? formatNumber(transactions) : 'Counting'],
+    ['Estimated exposure', found ? exposure : 'Counting'],
+  ];
+  return `<div class="node-card-head"><div class="node-glyph status-${found ? 'critical' : 'watch'}"><i></i></div><div><span>Customers</span><strong>Blast radius</strong></div><button data-map-action="reset" aria-label="Close details">${icon('close', 16)}</button></div>
+    <h3>${map.customers.caption}</h3>
+    <p>Each figure is one customer. The failure spreads outward from the epicentre; raised figures are the ones who complained.</p>
+    <dl>${facts.map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}</dl>`;
+}
+
+function nodeCard() {
+  if (state.selectedNode === 'crowd') return crowdCard();
+  const node = fixture.nodes.find((item) => item.id === state.selectedNode);
+  if (!node) return '';
+  const map = mapState();
+  const status = nodeStatus(node.id);
+  const lane = fixture.lanes.find((item) => item.nodes.includes(node.id));
+  const hyp = map.hypotheses[node.id];
+  const hypothesis = hyp && fixture.hypotheses.find((item) => item.id === hyp.id);
+  const hypState = hyp && { open: 'Open', testing: 'Testing in twin', proven: `Proven · ${hyp.score}%`, ruled: `Ruled out · ${hyp.score}%` }[hyp.state];
+  const facts = [['Current reading', map.metrics[node.id] || node.metric]];
+  if (hypothesis) facts.push([hyp.id, hypState], ['Routed to', hypothesis.owner], ['Disproof condition', hypothesis.disproof]);
+  if (map.tags[node.id]) facts.push(['Status', map.tags[node.id]]);
+  return `<div class="node-card-head"><div class="node-glyph status-${status}"><i></i></div><div><span>${lane.label}</span><strong>${node.name}</strong></div><button data-map-action="reset" aria-label="Close component details">${icon('close', 16)}</button></div>
+    <h3>${statusLabels[status]}</h3>
+    <p>${hypothesis ? hypothesis.claim : status === 'healthy' ? 'No abnormal errors, latency or volume changes on this component.' : map.insight.body}</p>
+    <dl>${facts.map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}</dl>`;
+}
+
+function updateNodeCard() {
+  const card = document.querySelector('.stage-node');
+  if (!card) return;
+  card.innerHTML = nodeCard();
+  card.classList.toggle('open', Boolean(state.selectedNode));
+  card.querySelector('[data-map-action="reset"]')?.addEventListener('click', () => serviceMap?.resetView());
+}
+
+function mapView() {
+  const step = fixture.demoSteps[state.demoStep];
+  const map = mapState();
+  const insight = map.insight;
+  const last = fixture.demoSteps.length - 1;
+  return `
+    <h1 class="visually-hidden">Service map</h1>
+    <section class="map-stage ${has3d ? '' : 'flat'}" data-reveal>
+      <div class="stage-top">
+        <article class="stage-story">
+          <div class="story-agent">${agentImage(insight.agent, agentForLabel(insight.label), `${insight.label} agent`)}</div>
+          <div class="story-copy">
+            <span class="story-kicker"><i>${String(state.demoStep + 1).padStart(2, '0')}</i>${step.time} · ${insight.label}</span>
+            <h2>${insight.title}</h2>
+            <p>${insight.body}</p>
+          </div>
+        </article>
+        <ol class="stage-pipeline" aria-label="Avera agent pipeline">${fixture.pipeline.map((stage, index) => `<li class="${index < map.stage ? 'done' : index === map.stage ? 'active' : ''}"><i>${index < map.stage ? '✓' : index + 1}</i><div><strong>${stage.label}</strong><span>${stage.agent}</span></div></li>`).join('')}</ol>
       </div>
-      <aside class="map-insight">
-        <div class="insight-agent">${agentImage('result', 'observability', 'Observability agent')}<div><span>Observability</span><strong>4 suspect zones marked</strong></div></div>
-        <h2>Failure follows one route</h2>
-        <p>Acknowledgement timeouts appear only when Bank X transfers pass through Gateway B. Core posting and direct Bank X calls remain healthy.</p>
-        <div class="evidence-facts"><div><span>Affected route share</span><strong>92%</strong></div><div><span>Timeout start</span><strong>10:42</strong></div><div><span>Recent change</span><strong>App v4.2</strong><small>Decoy under test</small></div></div>
-        <button class="primary-button" data-view="hypotheses">Review hypotheses ${icon('arrow', 17)}</button>
-      </aside>
+      <div class="stage-canvas">
+        ${has3d ? '<div class="map3d-slot" data-map-slot="full"></div>' : `<div class="topology">${flatTopology()}</div>`}
+        <aside class="stage-node ${state.selectedNode ? 'open' : ''}" aria-live="polite">${nodeCard()}</aside>
+      </div>
+      <div class="stage-bottom">
+        <button class="stage-play" data-action="play" aria-label="${state.playing ? 'Pause story' : 'Play story'}">${icon(state.playing ? 'pause' : 'play', 18)}</button>
+        <ol class="stage-timeline" style="--progress:${state.demoStep / last}">${fixture.demoSteps.map((item, index) => `<li><button class="${index < state.demoStep ? 'done' : ''} ${index === state.demoStep ? 'current' : ''}" data-step="${index}"><time>${item.time}</time><span>${item.label}</span></button></li>`).join('')}</ol>
+        ${has3d ? `<div class="map-controls"><button data-map-action="focus">${icon('focus', 16)} Zoom to suspect</button><button data-map-action="reset">${icon('reset', 16)} Reset view</button></div>` : ''}
+        ${mapLegend()}
+      </div>
     </section>`;
 }
 
@@ -217,19 +351,19 @@ function hypothesesView() {
     ${pageHeader('Hypotheses', 'Competing explanations ranked by evidence and Ghost Test results.', `<div class="threshold"><span>Handoff threshold</span><strong>85%</strong></div>`)}
     <section class="hypothesis-layout">
       <div class="hypothesis-board">
-        ${fixture.hypotheses.map((hypothesis) => `<article class="hypothesis-row ${hypothesis.state}">
+        ${fixture.hypotheses.map((hypothesis) => `<article class="hypothesis-row ${hypothesis.state}" data-reveal>
           <div class="hypothesis-id"><span>${hypothesis.id}</span><i>${hypothesis.rank}</i></div>
           <div class="hypothesis-claim"><div class="row-meta"><span>${hypothesis.zone}</span><em>${hypothesis.state}</em></div><h2>${hypothesis.claim}</h2><p>Routed to ${hypothesis.owner}</p></div>
-          <div class="confidence"><strong>${hypothesis.confidence}<small>%</small></strong><div><i style="width:${hypothesis.confidence}%"></i><b style="left:85%"></b></div><span>${hypothesis.confidence >= 85 ? 'Threshold cleared' : 'Below threshold'}</span></div>
+          <div class="confidence"><strong><span data-count="${hypothesis.confidence}">${hypothesis.confidence}</span><small>%</small></strong><div><i data-bar="${hypothesis.confidence}" style="width:${hypothesis.confidence}%"></i><b style="left:85%"></b></div><span>${hypothesis.confidence >= 85 ? 'Threshold cleared' : 'Below threshold'}</span></div>
           <details><summary>Evidence and disproof ${icon('arrow', 16)}</summary><div class="hypothesis-detail"><div><span>Evidence for</span>${hypothesis.evidence.map((item) => `<p>${item}</p>`).join('')}</div><div><span>Evidence against</span><p>${hypothesis.against}</p></div><div><span>Disproof condition</span><p>${hypothesis.disproof}</p></div></div></details>
         </article>`).join('')}
       </div>
-      <aside class="decision-column">
+      <aside class="decision-column" data-reveal data-tilt="4">
         ${agentImage('result', 'ghost', 'Ghost Test agent')}
         <span>Ghost Test decision</span>
         <h2>H1 survives every disproof check</h2>
         <p>Failure reproduced 5 of 5 times through Gateway B and 0 of 5 through the healthy control.</p>
-        <div class="decision-score"><span>Confidence</span><strong>96%</strong></div>
+        <div class="decision-score"><span>Confidence</span><strong class="num-3d"><span data-count="${fixture.hypotheses[0].confidence}">${fixture.hypotheses[0].confidence}</span>%</strong></div>
         <button class="primary-button" data-view="tests">Open test evidence ${icon('arrow', 17)}</button>
       </aside>
     </section>`;
@@ -243,13 +377,13 @@ function traceBars(values) {
 function testsView() {
   return `
     ${pageHeader('Ghost tests', 'Synthetic-only validation in the isolated digital twin.', `<div class="sandbox-chip"><i></i>Sandbox isolated</div>`)}
-    <section class="test-summary">
+    <section class="test-summary" data-reveal>
       <div class="test-agent">${agentImage('working', 'ghost', 'Ghost Test agent working')}<div><span>Validation complete</span><h2>15 tests separated the cause from the decoys.</h2><p>No customer data or funds entered the test environment.</p></div></div>
-      <div class="test-count"><span>Tests run</span><strong>15</strong><small>5 plans · 3 controls</small></div>
-      <div class="test-count"><span>Reproduced</span><strong>5</strong><small>Gateway B route only</small></div>
+      <div class="test-count"><span>Tests run</span><strong data-count="15">15</strong><small>5 plans · 3 controls</small></div>
+      <div class="test-count"><span>Reproduced</span><strong data-count="5">5</strong><small>Gateway B route only</small></div>
       <div class="test-count"><span>Elapsed</span><strong>3:32</strong><small>Digital twin time</small></div>
     </section>
-    <section class="test-table-wrap">
+    <section class="test-table-wrap" data-reveal data-stagger>
       <div class="table-head"><span>Test</span><span>Plan</span><span>Trace latency</span><span>Runs</span><span>Result</span></div>
       ${fixture.tests.map((test) => `<article class="test-row"><div><strong>${test.id}</strong><span>${test.hypothesis}</span></div><div><strong>${test.name}</strong><span>${test.duration}</span></div><div>${traceBars(test.trace)}<small>${Math.max(...test.trace)} ms peak</small></div><div><strong>${test.runs}</strong><span>reproduced</span></div><div><em class="verdict-${test.verdict}">${test.result}</em></div></article>`).join('')}
     </section>
@@ -260,14 +394,14 @@ function impactView() {
   const i = fixture.impact;
   return `
     ${pageHeader('Customer impact', 'Affected customers, transactions and silent behavioural signals.', `<div class="export-link">Snapshot at 10:57:06</div>`)}
-    <section class="impact-reveal">
+    <section class="impact-reveal" data-reveal>
       <div class="impact-copy"><span>Blast Radius result</span><h2>${formatNumber(i.silent)} customers were found before they had to complain.</h2><p>The validated fingerprint was matched across live and historical transaction records.</p></div>
-      <div class="impact-numbers"><div class="complained"><strong>${formatNumber(i.complained)}</strong><span>complained</span></div><div class="impact-connector"><i></i><b></b><small>Avera found</small></div><div class="affected"><strong>${formatNumber(i.affected)}</strong><span>affected</span></div></div>
-      <div class="silent-number"><span>Silent customers</span><strong>${formatNumber(i.silent)}</strong><small>${i.prevention}% complaint prevention opportunity</small></div>
+      <div class="impact-numbers"><div class="complained" data-tilt="8"><strong class="num-3d" data-count="${i.complained}">${formatNumber(i.complained)}</strong><span>complained</span></div><div class="impact-connector"><i></i><b></b><small>Avera found</small></div><div class="affected" data-tilt="8"><strong class="num-3d" data-count="${i.affected}">${formatNumber(i.affected)}</strong><span>affected</span></div></div>
+      <div class="silent-number"><span>Silent customers</span><strong data-count="${i.silent}">${formatNumber(i.silent)}</strong><small>${i.prevention}% complaint prevention opportunity</small></div>
     </section>
-    <section class="impact-detail">
+    <section class="impact-detail" data-reveal>
       <div class="impact-stats"><div><span>Affected transactions</span><strong>${formatNumber(i.transactions)}</strong></div><div><span>Estimated exposure</span><strong>${i.exposure}</strong></div><div><span>First affected</span><strong>10:42 AM</strong></div></div>
-      <div class="segment-list"><div class="section-title"><span>Customer segments</span><small>${formatNumber(i.affected)} total</small></div>${i.segments.map((segment) => `<div class="segment"><span>${segment.label}</span><div><i style="width:${segment.share}%"></i></div><strong>${formatNumber(segment.value)}</strong><small>${segment.share}%</small></div>`).join('')}</div>
+      <div class="segment-list"><div class="section-title"><span>Customer segments</span><small>${formatNumber(i.affected)} total</small></div>${i.segments.map((segment) => `<div class="segment"><span>${segment.label}</span><div><i data-bar="${segment.share}" style="width:${segment.share}%"></i></div><strong>${formatNumber(segment.value)}</strong><small>${segment.share}%</small></div>`).join('')}</div>
       <div class="impact-agent">${agentImage('result', 'blast', 'Blast Radius agent')}<div><span>Blast Radius</span><strong>Search complete</strong><p>Every matching customer has been tokenised and added to the notification audience.</p><button class="text-button" data-view="approvals">Review customer message ${icon('arrow', 16)}</button></div></div>
     </section>`;
 }
@@ -276,13 +410,13 @@ function planView() {
   const plan = fixture.fixPlan;
   return `
     ${pageHeader('Fix plan', 'Containment, permanent resolution, rollback and verification.', `<div class="plan-confidence"><span>Simulation success</span><strong>${plan.simulationSuccess}%</strong></div>`)}
-    <section class="plan-hero">
+    <section class="plan-hero" data-reveal>
       <div><span>Validated cause</span><h2>Gateway B acknowledgement handling fails for Bank X transfers.</h2><p>Contain the route first, then repair the connector and reconcile uncertain transaction states.</p></div>
       <div class="eta-band"><div><span>Containment</span><strong>${plan.containmentEta}</strong></div><i></i><div><span>Permanent fix</span><strong>${plan.fullEta}</strong></div><i></i><div><span>Reconciliation</span><strong>${plan.reconciliationEta}</strong></div></div>
     </section>
-    <section class="plan-body">
-      <div class="steps"><div class="section-title"><span>Execution plan</span><small>Human approval required before steps 01 and 02</small></div>${plan.steps.map((step, index) => `<article class="plan-step"><span>${step.n}</span><div><small>${step.owner}</small><h3>${step.title}</h3><p>${step.detail}</p></div><em class="step-${step.status}">${step.status}</em>${index < plan.steps.length - 1 ? '<i></i>' : ''}</article>`).join('')}</div>
-      <aside class="rollback"><div class="rollback-head">${icon('reset')}<span>Rollback condition</span></div><p>${plan.rollback}</p><div class="guardrail"><strong>No money movement</strong><span>Avera may prepare reconciliation batches. A human executes every financial action.</span></div><button class="primary-button" data-view="approvals">Review approvals ${icon('arrow', 17)}</button></aside>
+    <section class="plan-body" data-reveal>
+      <div class="steps" data-stagger><div class="section-title"><span>Execution plan</span><small>Human approval required before steps 01 and 02</small></div>${plan.steps.map((step, index) => `<article class="plan-step"><span>${step.n}</span><div><small>${step.owner}</small><h3>${step.title}</h3><p>${step.detail}</p></div><em class="step-${step.status}">${step.status}</em>${index < plan.steps.length - 1 ? '<i></i>' : ''}</article>`).join('')}</div>
+      <aside class="rollback" data-tilt="3"><div class="rollback-head">${icon('reset')}<span>Rollback condition</span></div><p>${plan.rollback}</p><div class="guardrail"><strong>No money movement</strong><span>Avera may prepare reconciliation batches. A human executes every financial action.</span></div><button class="primary-button" data-view="approvals">Review approvals ${icon('arrow', 17)}</button></aside>
     </section>`;
 }
 
@@ -291,8 +425,8 @@ function approvalsView() {
   const status = state.approvals[active.id];
   return `
     ${pageHeader('Approvals', 'Customer communication and production changes requiring human authority.', `<div class="approval-summary"><strong>${pendingCount()}</strong><span>pending decisions</span></div>`)}
-    <section class="approval-layout">
-      <div class="approval-queue">
+    <section class="approval-layout" data-reveal>
+      <div class="approval-queue" data-stagger>
         <div class="section-title"><span>Approval queue</span><small>Immutable audit log enabled</small></div>
         ${fixture.approvals.map((approval) => `<button class="approval-item ${approval.id === active.id ? 'active' : ''}" data-approval="${approval.id}"><i class="level-${approval.level}">L${approval.level}</i><div><span>${approval.kind}</span><strong>${approval.title}</strong><small>${approval.owner} · ${approval.created}</small></div><em class="status-${state.approvals[approval.id]}">${state.approvals[approval.id]}</em>${icon('arrow', 16)}</button>`).join('')}
       </div>
@@ -306,7 +440,7 @@ function approvalsView() {
 }
 
 function phonePreview() {
-  return `<div class="phone-preview-wrap"><div class="phone"><div class="phone-top"><i></i><span>10:58</span><b>● ● ●</b></div><div class="messages-head"><button>${icon('arrow', 15)}</button><div class="message-logo"><img src="/assets/avera-logo.png" alt=""/></div><div><strong>Avera Bank</strong><span>Verified sender</span></div></div><div class="phone-body"><time>Today 10:58</time><p>${fixture.sms}</p><small>Delivered</small></div><div class="phone-home"></div></div><div class="message-meta"><div><span>Audience</span><strong>${formatNumber(fixture.impact.affected)} customers</strong></div><div><span>Estimated delivery</span><strong>97.8%</strong></div><div><span>Contact preferences</span><strong>Respected</strong></div></div></div>`;
+  return `<div class="phone-preview-wrap"><div class="phone-stage"><div class="phone"><div class="phone-top"><i></i><span>10:58</span><b>● ● ●</b></div><div class="messages-head"><button>${icon('arrow', 15)}</button><div class="message-logo"><img src="/assets/avera-logo.png" alt=""/></div><div><strong>Avera Bank</strong><span>Verified sender</span></div></div><div class="phone-body"><time>Today 10:58</time><p>${fixture.sms}</p><small>Delivered</small></div><div class="phone-home"></div></div></div><div class="message-meta"><div><span>Audience</span><strong>${formatNumber(fixture.impact.affected)} customers</strong></div><div><span>Estimated delivery</span><strong>97.8%</strong></div><div><span>Contact preferences</span><strong>Respected</strong></div></div></div>`;
 }
 
 function routeChange() {
@@ -325,9 +459,9 @@ function codeDiff() {
 function timelineView() {
   return `
     ${pageHeader('Incident timeline', 'Every signal, agent decision, approval and verified action in order.', `<button class="secondary-button compact">Export audit trail</button>`)}
-    <section class="timeline-layout">
+    <section class="timeline-layout" data-reveal>
       <div class="timeline-scale"><span>10:40</span><span>10:45</span><span>10:50</span><span>10:55</span><span>11:00</span><span>11:05</span></div>
-      <div class="timeline-events">${fixture.timeline.map((event, index) => `<article class="timeline-event type-${event.type}"><time>${event.time}</time><i><b></b></i><div><span>${event.type}</span><h2>${event.title}</h2><p>${event.detail}</p></div>${index < fixture.timeline.length - 1 ? '<em></em>' : ''}</article>`).join('')}</div>
+      <div class="timeline-events" data-stagger>${fixture.timeline.map((event, index) => `<article class="timeline-event type-${event.type}"><time>${event.time}</time><i><b></b></i><div><span>${event.type}</span><h2>${event.title}</h2><p>${event.detail}</p></div>${index < fixture.timeline.length - 1 ? '<em></em>' : ''}</article>`).join('')}</div>
       <aside class="timeline-now"><span>Now</span><strong>Awaiting two approvals</strong><p>The incident remains contained in the digital twin. No production change has been applied.</p><button class="primary-button" data-view="approvals">Open approval queue ${icon('arrow', 17)}</button></aside>
     </section>`;
 }
@@ -337,12 +471,12 @@ function memoryView() {
   const records = fixture.memory.filter((record) => `${record.id} ${record.cause} ${record.fix}`.toLowerCase().includes(q));
   return `
     ${pageHeader('Incident memory', 'Validated causes, rejected hypotheses and outcomes from past incidents.', `<div class="memory-stat"><strong>247</strong><span>resolved incidents</span></div>`)}
-    <section class="memory-hero">
+    <section class="memory-hero" data-reveal>
       <div>${icon('spark', 26)}<span>Similarity match</span><h2>Current incident is ${fixture.incident.similarity}% similar to ${fixture.incident.similarIncident}.</h2><p>The fastest verified fix then was a reroute through Gateway C in nine minutes.</p><button class="primary-button" data-view="plan">Apply insight to plan ${icon('arrow', 17)}</button></div>
       ${agentImage('result', 'observability', 'Avera memory match')}
     </section>
     <section class="memory-search"><label>${icon('search', 18)}<input id="memory-query" value="${state.memoryQuery}" placeholder="Search causes, systems or fixes"/></label><button class="secondary-button">Filters</button></section>
-    <section class="memory-list"><div class="memory-list-head"><span>Incident</span><span>Similarity</span><span>Validated cause</span><span>Verified fix</span><span>Time to contain</span></div>${records.map((record) => `<article><div><strong>${record.id}</strong><span>${record.date}</span></div><div class="similarity"><i style="width:${record.similarity}%"></i><strong>${record.similarity}%</strong></div><p>${record.cause}</p><p>${record.fix}</p><div><strong>${record.time}</strong><span>${record.state}</span></div></article>`).join('') || '<div class="empty-result">No incidents match this search.</div>'}</section>`;
+    <section class="memory-list" data-reveal><div class="memory-list-head"><span>Incident</span><span>Similarity</span><span>Validated cause</span><span>Verified fix</span><span>Time to contain</span></div>${records.map((record) => `<article><div><strong>${record.id}</strong><span>${record.date}</span></div><div class="similarity"><i data-bar="${record.similarity}" style="width:${record.similarity}%"></i><strong>${record.similarity}%</strong></div><p>${record.cause}</p><p>${record.fix}</p><div><strong>${record.time}</strong><span>${record.state}</span></div></article>`).join('') || '<div class="empty-result">No incidents match this search.</div>'}</section>`;
 }
 
 function statesView() {
@@ -354,13 +488,13 @@ function statesView() {
   ];
   return `
     ${pageHeader('Agent states', 'A consistent visual language for attention, work, results and recovery.', `<div class="state-note">Motion respects reduced-motion settings</div>`)}
-    <section class="mascot-showcase">
-      ${fixture.agents.map((agent) => `<article class="agent-profile" style="--agent:${agent.color}"><div class="agent-profile-top">${agentImage('ambient', agent.id, `${agent.name} agent`)}<div><span>${agent.role}</span><h2>${agent.name}</h2><p>${agent.state}</p></div></div><div class="agent-color"><i></i><code>${agent.color}</code></div></article>`).join('')}
+    <section class="mascot-showcase" data-stagger>
+      ${fixture.agents.map((agent) => `<article class="agent-profile" data-tilt="6" style="--agent:${agent.color}"><div class="agent-profile-top">${agentImage('ambient', agent.id, `${agent.name} agent`)}<div><span>${agent.role}</span><h2>${agent.name}</h2><p>${agent.state}</p></div></div><div class="agent-color"><i></i><code>${agent.color}</code></div></article>`).join('')}
     </section>
-    <section class="mode-grid">
-      ${modes.map(([mode, label, description]) => `<article class="mode-card"><div class="mode-canvas">${agentImage(mode, mode === 'bug' ? 'resolution' : 'observability', `${label} mode`)}</div><div><span>${label}</span><p>${description}</p></div></article>`).join('')}
+    <section class="mode-grid" data-stagger>
+      ${modes.map(([mode, label, description]) => `<article class="mode-card" data-tilt="6"><div class="mode-canvas">${agentImage(mode, mode === 'bug' ? 'resolution' : 'observability', `${label} mode`)}</div><div><span>${label}</span><p>${description}</p></div></article>`).join('')}
     </section>
-    <section class="loading-lab"><div><span>Contextual loading state</span><h2>Testing the strongest explanation</h2><p>Run 4 of 5 · Comparing Gateway B with the healthy control</p><div class="phase-track"><i></i><i></i><i></i><i></i><b></b></div><div class="phase-labels"><span>Plan test</span><span>Build synthetic case</span><span>Run control</span><span>Score evidence</span></div></div>${agentImage('working', 'ghost', 'Ghost Test agent working')}</section>`;
+    <section class="loading-lab" data-reveal><div><span>Contextual loading state</span><h2>Testing the strongest explanation</h2><p>Run 4 of 5 · Comparing Gateway B with the healthy control</p><div class="phase-track"><i></i><i></i><i></i><i></i><b></b></div><div class="phase-labels"><span>Plan test</span><span>Build synthetic case</span><span>Run control</span><span>Score evidence</span></div></div>${agentImage('working', 'ghost', 'Ghost Test agent working')}</section>`;
 }
 
 function loadingView() {
@@ -381,17 +515,18 @@ function loadingView() {
 }
 
 let playTimer;
+let navigating = false;
 
-function navigate(view) {
-  if (view === state.view) return;
+async function navigate(view) {
+  if (view === state.view || navigating) return;
+  navigating = true;
+  await leaveView(document.querySelector('#main-content'));
   state.view = view;
-  state.loading = true;
+  if (view !== 'map') state.selectedNode = null;
   render();
-  window.setTimeout(() => {
-    state.loading = false;
-    render();
-    document.querySelector('#main-content')?.focus({ preventScroll: true });
-  }, 620);
+  window.scrollTo({ top: 0 });
+  document.querySelector('#main-content')?.focus({ preventScroll: true });
+  navigating = false;
 }
 
 function showToast(message) {
@@ -406,10 +541,16 @@ function setStep(step) {
   render();
 }
 
-function togglePlay() {
+function setDemoOpen(open) {
+  state.demoOpen = open;
+  document.querySelector('.demo-panel')?.classList.toggle('open', open);
+}
+
+function togglePlay(fromPanel = false) {
   state.playing = !state.playing;
   clearInterval(playTimer);
   if (state.playing) {
+    if (fromPanel) state.demoOpen = true;
     if (state.demoStep === fixture.demoSteps.length - 1) state.demoStep = 0;
     playTimer = window.setInterval(() => {
       if (state.demoStep >= fixture.demoSteps.length - 1) {
@@ -417,36 +558,55 @@ function togglePlay() {
         state.playing = false;
       } else state.demoStep += 1;
       render();
-    }, 2200);
+    }, 4500);
   }
   render();
-  document.querySelector('.demo-panel')?.classList.add('open');
+}
+
+function decide(decision) {
+  const approval = fixture.approvals.find((item) => item.id === state.activeApproval);
+  state.approvals[approval.id] = decision;
+  render();
+  showToast(`${approval.id} ${decision}. The audit record has been updated.`);
+  if (decision === 'approved' && approval.kind === 'Routing change' && state.demoStep === fixture.demoSteps.length - 2) {
+    window.setTimeout(() => {
+      setStep(fixture.demoSteps.length - 1);
+      showToast('Reroute applied in the simulated bank. Ghost Tests rerun green.');
+    }, 900);
+  }
 }
 
 function bindEvents() {
   document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigate(button.dataset.view)));
   document.querySelectorAll('[data-approval]').forEach((button) => button.addEventListener('click', () => { state.activeApproval = button.dataset.approval; render(); }));
-  document.querySelectorAll('[data-decision]').forEach((button) => button.addEventListener('click', () => {
-    const decision = button.dataset.decision;
-    state.approvals[state.activeApproval] = decision;
-    render();
-    showToast(`${state.activeApproval} ${decision}. The audit record has been updated.`);
-  }));
+  document.querySelectorAll('[data-decision]').forEach((button) => button.addEventListener('click', () => decide(button.dataset.decision)));
   document.querySelectorAll('[data-step]').forEach((button) => button.addEventListener('click', () => setStep(Number(button.dataset.step))));
-  document.querySelector('[data-action="demo-panel"]')?.addEventListener('click', () => document.querySelector('.demo-panel')?.classList.toggle('open'));
-  document.querySelector('.demo-panel [data-action="demo-panel"]')?.addEventListener('click', () => document.querySelector('.demo-panel')?.classList.remove('open'));
-  document.querySelector('[data-action="play"]')?.addEventListener('click', togglePlay);
+  document.querySelector('.topbar [data-action="demo-panel"]')?.addEventListener('click', () => setDemoOpen(!state.demoOpen));
+  document.querySelector('.demo-panel [data-action="demo-panel"]')?.addEventListener('click', () => setDemoOpen(false));
+  document.querySelectorAll('[data-action="play"]').forEach((button) => button.addEventListener('click', () => togglePlay(Boolean(button.closest('.demo-panel')))));
   document.querySelector('[data-action="next"]')?.addEventListener('click', () => setStep(state.demoStep + 1));
   document.querySelector('[data-action="reset"]')?.addEventListener('click', () => { state.playing = false; clearInterval(playTimer); setStep(0); });
   document.querySelector('[data-action="theme"]')?.addEventListener('click', () => { state.theme = state.theme === 'light' ? 'dark' : 'light'; render(); });
-  document.querySelector('#memory-query')?.addEventListener('input', (event) => { state.memoryQuery = event.target.value; window.clearTimeout(event.target._timer); event.target._timer = window.setTimeout(render, 180); });
-  document.addEventListener('keydown', keyboardShortcut, { once: true });
+  document.querySelector('[data-map-action="focus"]')?.addEventListener('click', () => serviceMap?.focusSuspect());
+  document.querySelectorAll('[data-map-action="reset"]').forEach((button) => button.addEventListener('click', () => serviceMap?.resetView()));
+  document.querySelector('#memory-query')?.addEventListener('input', (event) => {
+    state.memoryQuery = event.target.value;
+    window.clearTimeout(event.target._timer);
+    event.target._timer = window.setTimeout(() => {
+      render();
+      const input = document.querySelector('#memory-query');
+      input?.focus();
+      input?.setSelectionRange(input.value.length, input.value.length);
+    }, 180);
+  });
 }
 
-function keyboardShortcut(event) {
-  if (event.key.toLowerCase() === 'd' && !['INPUT', 'TEXTAREA'].includes(event.target.tagName)) {
-    document.querySelector('.demo-panel')?.classList.toggle('open');
-  }
-}
+document.addEventListener('keydown', (event) => {
+  if (event.key.toLowerCase() === 'd' && !['INPUT', 'TEXTAREA'].includes(event.target.tagName)) setDemoOpen(!state.demoOpen);
+});
 
 render();
+window.setTimeout(() => {
+  state.loading = false;
+  render();
+}, 1100);
