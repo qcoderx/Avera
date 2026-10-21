@@ -17,6 +17,7 @@ const state = {
   theme: 'light',
   memoryQuery: '',
   selectedNode: null,
+  cinematic: true,
 };
 
 const has3d = webglAvailable();
@@ -195,13 +196,15 @@ function mountMap(intro) {
       onSelect: (id) => {
         if (state.view !== 'map' || state.selectedNode === id) return;
         state.selectedNode = id;
-        updateMapInsight();
+        updateNodeCard();
       },
     });
   }
   serviceMap.setTheme(state.theme);
+  serviceMap.cinematic = state.cinematic;
   serviceMap.setStep(state.demoStep);
   serviceMap.mount(slot, { mode: slot.dataset.mapSlot, intro });
+  if (slot.dataset.mapSlot === 'full') updateMapInsets();
 }
 
 function overviewView() {
@@ -257,67 +260,91 @@ function mapLegend() {
 
 function flatTopology() {
   const byId = Object.fromEntries(fixture.nodes.map((node) => [node.id, node]));
-  const reroute = mapState().reroute;
+  const map = mapState();
   return `
-    <div class="map-labels">${fixture.lanes.map((lane) => `<span>${lane.label}</span>`).join('')}</div>
+    <div class="map-labels">${fixture.lanes.filter((lane) => lane.nodes.length).map((lane) => `<span>${lane.label}</span>`).join('')}</div>
     <svg class="map-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      ${fixture.edges.filter(([, , kind]) => kind !== 'reroute' || reroute !== 'hidden').map(([from, to, kind]) => { const a = byId[from], b = byId[to]; const suspect = from === 'gb' && to === 'bankx' && nodeStatus('gb') === 'critical'; return `<path class="${suspect ? 'suspect-edge' : ''} ${kind === 'reroute' ? `reroute-edge ${reroute}` : ''}" d="M ${a.x} ${a.y} C ${(a.x+b.x)/2} ${a.y}, ${(a.x+b.x)/2} ${b.y}, ${b.x} ${b.y}"/>`; }).join('')}
+      ${fixture.edges.filter(([from, to, kind]) => byId[from] && byId[to] && (kind !== 'reroute' || map.reroute !== 'hidden')).map(([from, to, kind]) => { const a = byId[from], b = byId[to]; const suspect = from === 'gb' && to === 'bankx' && map.bug === 'alert'; return `<path class="${suspect ? 'suspect-edge' : ''} ${kind === 'reroute' ? `reroute-edge ${map.reroute}` : ''}" d="M ${a.x} ${a.y} C ${(a.x+b.x)/2} ${a.y}, ${(a.x+b.x)/2} ${b.y}, ${b.x} ${b.y}"/>`; }).join('')}
     </svg>
-    ${fixture.nodes.map((node) => { const status = nodeStatus(node.id); return `<div class="map-node ${status}" style="--x:${node.x}%;--y:${node.y}%"><i></i><span>${node.name}</span><small>${mapState().metrics[node.id] || node.metric}</small>${mapState().tags[node.id] ? `<b>${mapState().tags[node.id]}</b>` : ''}</div>`; }).join('')}`;
-}
-
-function mapInsight() {
-  const insight = mapState().insight;
-  const node = fixture.nodes.find((item) => item.id === state.selectedNode);
-  if (node) {
-    const status = nodeStatus(node.id);
-    const tag = mapState().tags[node.id] || '';
-    const hypothesis = fixture.hypotheses.find((item) => tag.startsWith(item.id));
-    const lane = fixture.lanes.find((item) => item.nodes.includes(node.id));
-    return `<div class="insight-agent"><div class="node-glyph status-${status}"><i></i></div><div><span>${lane.label}</span><strong>${node.name}</strong></div></div>
-      <h2>${statusLabels[status]}</h2>
-      <p>${hypothesis ? hypothesis.claim : status === 'healthy' ? 'No abnormal errors, latency or volume changes on this component.' : insight.body}</p>
-      <div class="evidence-facts"><div><span>Current reading</span><strong>${mapState().metrics[node.id] || node.metric}</strong></div>${tag ? `<div><span>Hypothesis</span><strong>${tag}</strong>${hypothesis ? `<small>Routed to ${hypothesis.owner}</small>` : ''}</div>` : ''}${hypothesis ? `<div><span>Disproof condition</span><strong class="fact-text">${hypothesis.disproof}</strong></div>` : ''}</div>
-      <button class="secondary-button" data-map-action="reset">${icon('orbit', 17)} Back to full map</button>`;
-  }
-  return `<div class="insight-agent">${agentImage(insight.agent, agentForLabel(insight.label), `${insight.label} agent`)}<div><span>${insight.label}</span><strong>${fixture.demoSteps[state.demoStep].title}</strong></div></div>
-    <h2>${insight.title}</h2>
-    <p>${insight.body}</p>
-    <div class="evidence-facts">${insight.facts.map(([label, value, note]) => `<div><span>${label}</span><strong>${value}</strong>${note ? `<small>${note}</small>` : ''}</div>`).join('')}</div>
-    <button class="primary-button" data-view="hypotheses">Review hypotheses ${icon('arrow', 17)}</button>`;
+    ${fixture.nodes.map((node) => { const tag = map.hypotheses[node.id]?.id || map.tags[node.id]; return `<div class="map-node ${nodeStatus(node.id)}" style="--x:${node.x}%;--y:${node.y}%"><i></i><span>${node.name}</span><small>${map.metrics[node.id] || node.metric}</small>${tag ? `<b>${tag}</b>` : ''}</div>`; }).join('')}`;
 }
 
 function agentForLabel(label) {
   return { Observability: 'observability', 'Ghost Test': 'ghost', 'Blast Radius': 'blast', Resolution: 'resolution' }[label] || 'observability';
 }
 
-function updateMapInsight() {
-  const panel = document.querySelector('.map-insight');
-  if (!panel) return;
-  panel.innerHTML = mapInsight();
-  panel.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigate(button.dataset.view)));
-  panel.querySelector('[data-map-action="reset"]')?.addEventListener('click', () => serviceMap?.resetView());
-  panel.classList.remove('swap');
-  void panel.offsetWidth;
-  panel.classList.add('swap');
+function nodeCard() {
+  const node = fixture.nodes.find((item) => item.id === state.selectedNode);
+  if (!node) return '';
+  const map = mapState();
+  const status = nodeStatus(node.id);
+  const lane = fixture.lanes.find((item) => item.nodes.includes(node.id));
+  const hyp = map.hypotheses[node.id];
+  const hypothesis = hyp && fixture.hypotheses.find((item) => item.id === hyp.id);
+  const hypState = hyp && { open: 'Open', testing: 'Testing in twin', proven: `Proven · ${hyp.score}%`, ruled: `Ruled out · ${hyp.score}%` }[hyp.state];
+  const facts = [['Current reading', map.metrics[node.id] || node.metric]];
+  if (hypothesis) facts.push([hyp.id, hypState], ['Routed to', hypothesis.owner], ['Disproof condition', hypothesis.disproof]);
+  if (map.tags[node.id]) facts.push(['Status', map.tags[node.id]]);
+  return `<div class="node-card-head"><div class="node-glyph status-${status}"><i></i></div><div><span>${lane.label}</span><strong>${node.name}</strong></div><button data-map-action="reset" aria-label="Close component details">${icon('close', 16)}</button></div>
+    <h3>${statusLabels[status]}</h3>
+    <p>${hypothesis ? hypothesis.claim : status === 'healthy' ? 'No abnormal errors, latency or volume changes on this component.' : map.insight.body}</p>
+    <dl>${facts.map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}</dl>`;
+}
+
+function updateNodeCard() {
+  const card = document.querySelector('.stage-node');
+  if (!card) return;
+  card.innerHTML = nodeCard();
+  card.classList.toggle('open', Boolean(state.selectedNode));
+  card.querySelector('[data-map-action="reset"]')?.addEventListener('click', () => serviceMap?.resetView());
 }
 
 function mapView() {
   const step = fixture.demoSteps[state.demoStep];
+  const map = mapState();
+  const insight = map.insight;
+  const last = fixture.demoSteps.length - 1;
   return `
-    ${pageHeader('Service map', 'Live dependencies with suspect zones, route health and recent changes.', mapLegend())}
-    <section class="map-layout" data-reveal>
-      <div class="topology ${has3d ? 'topology-3d' : ''}">
-        ${has3d ? `<div class="map3d-slot" data-map-slot="full"></div>
-        <div class="map-hud">
-          <div class="hud-step"><i>${String(state.demoStep + 1).padStart(2, '0')}</i><div><span>${step.label}</span><strong>${step.title}</strong></div></div>
-          <div class="hud-flow"><span><i class="flow-ok"></i>Transfers</span><span><i class="flow-fail"></i>Unacknowledged</span><span><i class="flow-probe"></i>Ghost probe</span><span><i class="flow-reroute"></i>Reroute</span></div>
-        </div>
-        <div class="map-controls"><button data-map-action="focus">${icon('focus', 16)} Focus suspect</button><button data-map-action="reset">${icon('orbit', 16)} Reset view</button></div>
-        <p class="map-hint">Drag to orbit · scroll to zoom · click a component</p>` : flatTopology()}
+    <h1 class="visually-hidden">Service map</h1>
+    <section class="map-stage ${has3d ? '' : 'flat'}" data-reveal>
+      ${has3d ? '<div class="map3d-slot" data-map-slot="full"></div>' : `<div class="topology">${flatTopology()}</div>`}
+      <div class="stage-top">
+        <article class="stage-story">
+          <div class="story-agent">${agentImage(insight.agent, agentForLabel(insight.label), `${insight.label} agent`)}</div>
+          <div class="story-copy">
+            <span class="story-kicker"><i>${String(state.demoStep + 1).padStart(2, '0')}</i>${step.time} · ${insight.label}</span>
+            <h2>${insight.title}</h2>
+            <p>${insight.body}</p>
+          </div>
+        </article>
+        <ol class="stage-pipeline" aria-label="Avera agent pipeline">${fixture.pipeline.map((stage, index) => `<li class="${index < map.stage ? 'done' : index === map.stage ? 'active' : ''}"><i>${index < map.stage ? '✓' : index + 1}</i><div><strong>${stage.label}</strong><span>${stage.agent}</span></div></li>`).join('')}</ol>
       </div>
-      <aside class="map-insight">${mapInsight()}</aside>
+      <aside class="stage-node ${state.selectedNode ? 'open' : ''}" aria-live="polite">${nodeCard()}</aside>
+      <div class="stage-bottom">
+        <button class="stage-play" data-action="play" aria-label="${state.playing ? 'Pause story' : 'Play story'}">${icon(state.playing ? 'pause' : 'play', 18)}</button>
+        <ol class="stage-timeline" style="--progress:${state.demoStep / last}">${fixture.demoSteps.map((item, index) => `<li><button class="${index < state.demoStep ? 'done' : ''} ${index === state.demoStep ? 'current' : ''}" data-step="${index}"><time>${item.time}</time><span>${item.label}</span></button></li>`).join('')}</ol>
+        ${has3d ? `<div class="map-controls"><button data-map-action="cinematic" aria-pressed="${state.cinematic}">${icon('orbit', 16)} Cinematic ${state.cinematic ? 'on' : 'off'}</button><button data-map-action="focus">${icon('focus', 16)} Suspect</button><button data-map-action="reset">${icon('reset', 16)} Reset</button></div>` : ''}
+        ${mapLegend()}
+      </div>
     </section>`;
+}
+
+// Tell the map how much of the stage the overlays cover, so it frames the board in the rest.
+function updateMapInsets() {
+  const stage = document.querySelector('.map-stage');
+  const top = stage?.querySelector('.stage-top');
+  const bottom = stage?.querySelector('.stage-bottom');
+  if (!serviceMap || !stage || !top || !bottom) return;
+  if (getComputedStyle(top).position === 'static') {
+    serviceMap.setInsets({});
+    return;
+  }
+  serviceMap.setInsets({
+    top: top.offsetTop + top.offsetHeight + 8,
+    bottom: stage.clientHeight - bottom.offsetTop + 8,
+    left: 8,
+    right: 8,
+  });
 }
 
 function hypothesesView() {
@@ -520,11 +547,11 @@ function setDemoOpen(open) {
   document.querySelector('.demo-panel')?.classList.toggle('open', open);
 }
 
-function togglePlay() {
+function togglePlay(fromPanel = false) {
   state.playing = !state.playing;
   clearInterval(playTimer);
   if (state.playing) {
-    state.demoOpen = true;
+    if (fromPanel) state.demoOpen = true;
     if (state.demoStep === fixture.demoSteps.length - 1) state.demoStep = 0;
     playTimer = window.setInterval(() => {
       if (state.demoStep >= fixture.demoSteps.length - 1) {
@@ -532,7 +559,7 @@ function togglePlay() {
         state.playing = false;
       } else state.demoStep += 1;
       render();
-    }, 3200);
+    }, 4500);
   }
   render();
 }
@@ -557,9 +584,10 @@ function bindEvents() {
   document.querySelectorAll('[data-step]').forEach((button) => button.addEventListener('click', () => setStep(Number(button.dataset.step))));
   document.querySelector('.topbar [data-action="demo-panel"]')?.addEventListener('click', () => setDemoOpen(!state.demoOpen));
   document.querySelector('.demo-panel [data-action="demo-panel"]')?.addEventListener('click', () => setDemoOpen(false));
-  document.querySelector('[data-action="play"]')?.addEventListener('click', togglePlay);
+  document.querySelectorAll('[data-action="play"]').forEach((button) => button.addEventListener('click', () => togglePlay(Boolean(button.closest('.demo-panel')))));
   document.querySelector('[data-action="next"]')?.addEventListener('click', () => setStep(state.demoStep + 1));
   document.querySelector('[data-action="reset"]')?.addEventListener('click', () => { state.playing = false; clearInterval(playTimer); setStep(0); });
+  document.querySelector('[data-map-action="cinematic"]')?.addEventListener('click', () => { state.cinematic = !state.cinematic; serviceMap?.setCinematic(state.cinematic); render(); });
   document.querySelector('[data-action="theme"]')?.addEventListener('click', () => { state.theme = state.theme === 'light' ? 'dark' : 'light'; render(); });
   document.querySelector('[data-map-action="focus"]')?.addEventListener('click', () => serviceMap?.focusSuspect());
   document.querySelectorAll('[data-map-action="reset"]').forEach((button) => button.addEventListener('click', () => serviceMap?.resetView()));
@@ -574,6 +602,8 @@ function bindEvents() {
     }, 180);
   });
 }
+
+window.addEventListener('resize', () => { if (state.view === 'map') updateMapInsets(); });
 
 document.addEventListener('keydown', (event) => {
   if (event.key.toLowerCase() === 'd' && !['INPUT', 'TEXTAREA'].includes(event.target.tagName)) setDemoOpen(!state.demoOpen);

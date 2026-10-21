@@ -16,8 +16,8 @@ const STATUS_COLORS = {
 };
 
 const THEMES = {
-  light: { board: '#fffdfb', plinth: '#e3d5cc', lane: '#f6efe9', node: '#fffdfb', nodeBase: '#eadfd8', grid: '#dccfc6', edge: '#d3c2b7' },
-  dark: { board: '#2a211e', plinth: '#120d0c', lane: '#241c19', node: '#3a2e2a', nodeBase: '#1f1816', grid: '#4a3b35', edge: '#5c4a42' },
+  light: { board: '#fffdfb', plinth: '#e3d5cc', lane: '#f6efe9', node: '#fffdfb', nodeBase: '#eadfd8', grid: '#dccfc6', edge: '#d3c2b7', crowd: '#d8cbc2', district: '#f8f1ec' },
+  dark: { board: '#2a211e', plinth: '#120d0c', lane: '#241c19', node: '#3a2e2a', nodeBase: '#1f1816', grid: '#4a3b35', edge: '#5c4a42', crowd: '#5a4a43', district: '#302622' },
 };
 
 const COLORS = {
@@ -28,9 +28,13 @@ const COLORS = {
 };
 
 const LANE_SHAPES = { channels: 'tile', services: 'tower', routes: 'hex', partners: 'vault' };
-const SHAPE_HEIGHT = { tile: 0.42, tower: 0.78, hex: 0.62, vault: 0.86 };
-const PARTICLE_COUNT = 120;
+const SHAPE_HEIGHT = { tile: 0.5, tower: 0.92, hex: 0.72, vault: 1 };
+const S = 1.22;
+const TWIN_LIFT = 8;
+const PARTICLE_COUNT = 150;
+const FIELD = { cols: 26, rows: 43, gap: 0.27, centerX: -25 };
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const format = new Intl.NumberFormat('en-NG');
 
 export function webglAvailable() {
   try {
@@ -41,8 +45,19 @@ export function webglAvailable() {
   }
 }
 
+// Small seeded generator so the crowd looks identical on every demo run.
+function seeded(seed) {
+  let a = seed;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function toWorld(node) {
-  return new THREE.Vector3((node.x - 48.5) * 0.25, 0, (node.y - 53) * 0.2);
+  return new THREE.Vector3((node.x - 48.5) * 0.4, 0, (node.y - 53) * 0.36);
 }
 
 function canvasTexture(size, draw) {
@@ -51,6 +66,7 @@ function canvasTexture(size, draw) {
   draw(canvas.getContext('2d'), size);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
   return texture;
 }
 
@@ -63,33 +79,97 @@ function radialTexture(stops) {
   });
 }
 
+function iconTexture(icon) {
+  return canvasTexture(256, (ctx, size) => {
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 16;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = 'rgba(0,0,0,.18)';
+    ctx.shadowOffsetY = 6;
+    const c = size / 2;
+    if (icon === 'phone') {
+      ctx.beginPath();
+      ctx.roundRect(c - 46, c - 76, 92, 152, 22);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(c, c + 52, 8, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (icon === 'route') {
+      ctx.beginPath();
+      ctx.moveTo(c - 80, c);
+      ctx.lineTo(c - 20, c);
+      ctx.moveTo(c - 20, c);
+      ctx.bezierCurveTo(c + 10, c, c + 20, c - 56, c + 70, c - 56);
+      ctx.moveTo(c - 20, c);
+      ctx.bezierCurveTo(c + 10, c, c + 20, c + 56, c + 70, c + 56);
+      ctx.moveTo(c - 20, c);
+      ctx.lineTo(c + 70, c);
+      ctx.stroke();
+    } else {
+      const fontSize = icon.length > 2 ? (icon.length > 3 ? 74 : 92) : 150;
+      ctx.font = `800 ${fontSize}px "Segoe UI", Arial, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(icon, c, c + fontSize * 0.05);
+    }
+  });
+}
+
 function shapeGeometry(shape, scale = 1) {
   const h = SHAPE_HEIGHT[shape];
-  if (shape === 'hex') return new THREE.CylinderGeometry(0.98 * scale, 1.04 * scale, h, 6, 1);
-  if (shape === 'vault') return new THREE.CylinderGeometry(0.86 * scale, 0.92 * scale, h, 48, 1);
-  if (shape === 'tower') return new RoundedBoxGeometry(2.2 * scale, h, 1.45 * scale, 4, 0.2);
-  return new RoundedBoxGeometry(1.9 * scale, h, 1.25 * scale, 4, 0.18);
+  const k = S * scale;
+  if (shape === 'hex') return new THREE.CylinderGeometry(0.98 * k, 1.04 * k, h, 6, 1);
+  if (shape === 'vault') return new THREE.CylinderGeometry(0.86 * k, 0.92 * k, h, 48, 1);
+  if (shape === 'tower') return new RoundedBoxGeometry(2.2 * k, h, 1.45 * k, 4, 0.22);
+  return new RoundedBoxGeometry(1.9 * k, h, 1.25 * k, 4, 0.2);
 }
 
 function capGeometry(shape) {
-  if (shape === 'hex') return new THREE.CylinderGeometry(0.78, 0.82, 0.1, 6, 1);
-  if (shape === 'vault') return new THREE.CylinderGeometry(0.68, 0.7, 0.1, 48, 1);
-  if (shape === 'tower') return new RoundedBoxGeometry(1.86, 0.1, 1.1, 2, 0.05);
-  return new RoundedBoxGeometry(1.58, 0.1, 0.92, 2, 0.05);
+  if (shape === 'hex') return new THREE.CylinderGeometry(0.78 * S, 0.82 * S, 0.1, 6, 1);
+  if (shape === 'vault') return new THREE.CylinderGeometry(0.68 * S, 0.7 * S, 0.1, 48, 1);
+  if (shape === 'tower') return new RoundedBoxGeometry(1.86 * S, 0.1, 1.1 * S, 2, 0.05);
+  return new RoundedBoxGeometry(1.58 * S, 0.1, 0.92 * S, 2, 0.05);
 }
+
+const ICON_SIZE = { hex: 1.3, vault: 1.15, tower: 1.15, tile: 1.05 };
 
 function dashedRing(radius, color) {
   const group = new THREE.Group();
   const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
-  const dashes = 18;
+  const dashes = 20;
   for (let i = 0; i < dashes; i += 1) {
-    const arc = new THREE.Mesh(new THREE.RingGeometry(radius, radius + 0.09, 6, 1, (i / dashes) * Math.PI * 2, (Math.PI * 2 / dashes) * 0.55), material);
+    const arc = new THREE.Mesh(new THREE.RingGeometry(radius, radius + 0.1, 6, 1, (i / dashes) * Math.PI * 2, (Math.PI * 2 / dashes) * 0.55), material);
     arc.rotation.x = -Math.PI / 2;
     group.add(arc);
   }
   group.userData.material = material;
   return group;
 }
+
+function arc(start, end, lift) {
+  const dir = end.clone().sub(start).multiplyScalar(0.28);
+  return new THREE.CubicBezierCurve3(
+    start,
+    start.clone().add(dir).add(new THREE.Vector3(0, lift, 0)),
+    end.clone().sub(dir).add(new THREE.Vector3(0, lift, 0)),
+    end,
+  );
+}
+
+function label(className, html, center = [0.5, 0.5]) {
+  const el = document.createElement('div');
+  el.className = className;
+  el.innerHTML = html;
+  const object = new CSS2DObject(el);
+  object.center.set(...center);
+  return object;
+}
+
+const LOCK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+const UNLOCK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/></svg>';
+const WARN_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"/><path d="M12 10v4M12 17h.01"/></svg>';
 
 export class ServiceMap {
   constructor(fixture, { onSelect } = {}) {
@@ -98,6 +178,7 @@ export class ServiceMap {
     this.theme = 'light';
     this.step = -1;
     this.mode = 'full';
+    this.cinematic = true;
     this.selected = null;
     this.hovered = null;
     this.running = false;
@@ -106,6 +187,9 @@ export class ServiceMap {
     this.swayClock = 0;
     this.focusTween = null;
     this.frameTimes = [];
+    this.insets = { top: 0, right: 0, bottom: 0, left: 0 };
+    this.twinLevel = 0;
+    this.blastLevel = 0;
 
     this.host = document.createElement('div');
     this.host.className = 'map3d-host';
@@ -115,7 +199,6 @@ export class ServiceMap {
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NeutralToneMapping;
-    this.renderer.toneMappingExposure = 1;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.domElement.className = 'map3d-canvas';
@@ -130,31 +213,38 @@ export class ServiceMap {
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     this.scene.environmentIntensity = 0.55;
 
-    this.camera = new THREE.PerspectiveCamera(34, 1.6, 0.1, 200);
-    this.camera.position.set(0, 15.5, 17.5);
+    this.camera = new THREE.PerspectiveCamera(32, 1.6, 0.1, 400);
+    this.camera.position.set(0, 30, 34);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.07;
     this.controls.enablePan = false;
-    this.controls.minPolarAngle = 0.32;
-    this.controls.maxPolarAngle = 1.16;
-    this.controls.minDistance = 9;
-    this.controls.maxDistance = 80;
+    this.controls.minPolarAngle = 0.3;
+    this.controls.maxPolarAngle = 1.22;
+    this.controls.minDistance = 10;
+    this.controls.maxDistance = 140;
     this.controls.rotateSpeed = 0.6;
-    this.controls.target.set(0.2, 0, 0.4);
-    this.controls.addEventListener('start', () => { this.lastInteraction = Infinity; });
+    this.controls.addEventListener('start', () => { this.lastInteraction = Infinity; this.focusTween?.kill(); });
     this.controls.addEventListener('end', () => { this.lastInteraction = performance.now(); });
 
     this.clock = new THREE.Clock();
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2(9, 9);
+    this.tmpMatrix = new THREE.Matrix4();
+    this.tmpQuat = new THREE.Quaternion();
+    this.tmpScale = new THREE.Vector3();
+    this.tmpPos = new THREE.Vector3();
+    this.tmpColor = new THREE.Color();
 
+    this.layout();
     this.buildLights();
     this.buildBoard();
+    this.buildCrowd();
     this.buildNodes();
     this.buildEdges();
+    this.buildTwin();
     this.buildParticles();
-    this.buildEffects();
+    this.buildStoryMarkers();
     this.buildMascots();
     this.bindPointer();
 
@@ -163,68 +253,140 @@ export class ServiceMap {
     document.addEventListener('visibilitychange', () => this.updateLoop());
   }
 
+  layout() {
+    const half = { x: (FIELD.cols - 1) * FIELD.gap / 2, z: (FIELD.rows - 1) * FIELD.gap / 2 };
+    this.field = { ...FIELD, half, right: FIELD.centerX + half.x + 0.9 };
+    this.bounds = { minX: FIELD.centerX - half.x - 2, maxX: 18.6, minZ: -12.4, maxZ: 12.4 };
+    this.boardCenter = new THREE.Vector3((this.bounds.minX + this.bounds.maxX) / 2, 0, 0);
+  }
+
   buildLights() {
     this.scene.add(new THREE.HemisphereLight('#fffaf5', '#e9ddd5', 1.1));
     const key = new THREE.DirectionalLight('#fff4ea', 2.1);
-    key.position.set(-7, 16, 9);
+    key.position.set(-14, 26, 16);
+    key.target.position.copy(this.boardCenter);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
-    Object.assign(key.shadow.camera, { left: -15, right: 15, top: 11, bottom: -11, near: 1, far: 50 });
+    Object.assign(key.shadow.camera, { left: -30, right: 30, top: 20, bottom: -20, near: 1, far: 90 });
     key.shadow.bias = -0.0004;
     key.shadow.normalBias = 0.03;
-    this.scene.add(key);
+    this.scene.add(key, key.target);
     const rim = new THREE.DirectionalLight('#ffd8cf', 0.65);
-    rim.position.set(10, 6, -10);
+    rim.position.set(16, 8, -16);
     this.scene.add(rim);
   }
 
   buildBoard() {
     const t = THEMES[this.theme];
+    const { minX, maxX, minZ, maxZ } = this.bounds;
+    const width = maxX - minX;
+    const depth = maxZ - minZ;
     this.board = new THREE.Group();
+    this.board.position.copy(this.boardCenter);
     this.scene.add(this.board);
 
     this.boardMat = new THREE.MeshStandardMaterial({ color: t.board, roughness: 0.92 });
     this.plinthMat = new THREE.MeshStandardMaterial({ color: t.plinth, roughness: 0.95 });
-    const top = new THREE.Mesh(new RoundedBoxGeometry(24, 0.5, 15, 6, 0.42), this.boardMat);
-    top.position.y = -0.25;
+    const top = new THREE.Mesh(new RoundedBoxGeometry(width, 0.6, depth, 6, 0.5), this.boardMat);
+    top.position.y = -0.3;
     top.receiveShadow = true;
-    const plinth = new THREE.Mesh(new RoundedBoxGeometry(24, 0.5, 15, 6, 0.42), this.plinthMat);
-    plinth.position.y = -0.55;
+    const plinth = new THREE.Mesh(new RoundedBoxGeometry(width, 0.6, depth, 6, 0.5), this.plinthMat);
+    plinth.position.y = -0.68;
     plinth.receiveShadow = true;
     this.board.add(plinth, top);
 
     this.gridTexture = canvasTexture(256, (ctx, size) => {
-      ctx.clearRect(0, 0, size, size);
       ctx.fillStyle = '#ffffff';
       for (let x = 16; x < size; x += 32) for (let y = 16; y < size; y += 32) {
-        ctx.beginPath(); ctx.arc(x, y, 1.6, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x, y, 1.7, 0, Math.PI * 2); ctx.fill();
       }
     });
     this.gridTexture.wrapS = this.gridTexture.wrapT = THREE.RepeatWrapping;
-    this.gridTexture.repeat.set(12, 7.5);
+    this.gridTexture.repeat.set(width / 2.1, depth / 2.1);
     this.gridMat = new THREE.MeshBasicMaterial({ map: this.gridTexture, color: t.grid, transparent: true, depthWrite: false });
-    const grid = new THREE.Mesh(new THREE.PlaneGeometry(23, 14), this.gridMat);
+    const grid = new THREE.Mesh(new THREE.PlaneGeometry(width - 1, depth - 1), this.gridMat);
     grid.rotation.x = -Math.PI / 2;
     grid.position.y = 0.006;
     this.board.add(grid);
 
-    this.laneMat = new THREE.MeshStandardMaterial({ color: t.lane, roughness: 1, transparent: true, opacity: 0.9 });
+    this.laneMat = new THREE.MeshStandardMaterial({ color: t.lane, roughness: 1 });
     const byId = Object.fromEntries(this.fixture.nodes.map((node) => [node.id, node]));
     this.fixture.lanes.forEach((lane, index) => {
-      const xs = lane.nodes.map((id) => toWorld(byId[id]).x);
-      const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
-      if (index % 2 === 0) {
-        const band = new THREE.Mesh(new RoundedBoxGeometry(3.6, 0.02, 13.6, 2, 0.01), this.laneMat);
-        band.position.set(cx, 0.012, 0);
+      const cx = lane.nodes.length
+        ? lane.nodes.map((id) => toWorld(byId[id]).x).reduce((a, b) => a + b, 0) / lane.nodes.length
+        : this.field.centerX;
+      if (index % 2 === 1) {
+        const band = new THREE.Mesh(new RoundedBoxGeometry(4.6, 0.02, depth - 1.6, 2, 0.01), this.laneMat);
+        band.position.set(cx - this.boardCenter.x, 0.012, 0);
         band.receiveShadow = true;
         this.board.add(band);
       }
-      const el = document.createElement('div');
-      el.className = 'map3d-lane';
-      el.textContent = lane.label;
-      const label = new CSS2DObject(el);
-      label.position.set(cx, -0.2, 7.55);
-      this.board.add(label);
+      const lane3d = label('map3d-lane', lane.label);
+      lane3d.position.set(cx - this.boardCenter.x, -0.24, maxZ + 0.35);
+      this.board.add(lane3d);
+    });
+  }
+
+  buildCrowd() {
+    const t = THEMES[this.theme];
+    const { cols, rows, gap, centerX, half } = this.field;
+    const { affected, complained } = this.fixture.impact;
+    const random = seeded(1109);
+
+    this.districtMat = new THREE.MeshStandardMaterial({ color: t.district, roughness: 0.9 });
+    const district = new THREE.Mesh(new RoundedBoxGeometry(half.x * 2 + 1.4, 0.16, half.z * 2 + 1.4, 3, 0.08), this.districtMat);
+    district.position.set(centerX, 0.08, 0);
+    district.receiveShadow = true;
+    this.scene.add(district);
+
+    const geometry = new THREE.CapsuleGeometry(0.075, 0.12, 3, 8);
+    geometry.translate(0, 0.135, 0);
+    this.crowdMat = new THREE.MeshStandardMaterial({ roughness: 0.6 });
+    this.crowd = new THREE.InstancedMesh(geometry, this.crowdMat, affected);
+    this.crowd.castShadow = true;
+    this.crowd.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.crowdNeutral = new THREE.Color(t.crowd);
+    this.people = [];
+    const complainerSlots = new Set();
+    while (complainerSlots.size < complained) complainerSlots.add(Math.floor(random() * affected));
+    for (let i = 0; i < affected; i += 1) {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const complainer = complainerSlots.has(i);
+      this.people.push({
+        x: centerX - half.x + col * gap + (random() - 0.5) * 0.06,
+        z: -half.z + row * gap + (random() - 0.5) * 0.06,
+        threshold: complainer ? random() * 0.25 : random(),
+        complainer,
+        color: this.crowdNeutral.clone(),
+        lift: 0,
+        phase: random() * Math.PI * 2,
+      });
+      this.crowd.setColorAt(i, this.crowdNeutral);
+    }
+    this.scene.add(this.crowd);
+    this.crowdTarget = { affected: 0, complainers: false, notified: false };
+
+    this.complainerRings = [...complainerSlots].map((index) => {
+      const person = this.people[index];
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.24, 24), new THREE.MeshBasicMaterial({ color: COLORS.wine, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(person.x, 0.18, person.z);
+      this.scene.add(ring);
+      return ring;
+    });
+
+    this.crowdLabel = label('map3d-crowd', '', [0.5, 0]);
+    this.crowdLabel.position.set(centerX, 0.2, half.z + 0.9);
+    this.scene.add(this.crowdLabel);
+
+    const quotes = this.fixture.rawComplaints;
+    this.bubbles = quotes.map((text, index) => {
+      const bubble = label('map3d-bubble', `<div class="map3d-card">${text}</div>`, [0.08, 1]);
+      bubble.element.style.setProperty('--delay', `${index * 0.45}s`);
+      bubble.position.set(centerX - half.x + 0.4 + (index % 2) * 1.6, 0.9, -half.z + 1.6 + index * ((half.z * 2 - 2.4) / (quotes.length - 1)));
+      this.scene.add(bubble);
+      return bubble;
     });
   }
 
@@ -249,11 +411,10 @@ export class ServiceMap {
       const group = new THREE.Group();
       const home = toWorld(data);
       group.position.copy(home);
-
       const lift = new THREE.Group();
       group.add(lift);
 
-      const base = new THREE.Mesh(shapeGeometry(shape, 1.06), this.nodeBaseMat);
+      const base = new THREE.Mesh(shapeGeometry(shape, 1.07), this.nodeBaseMat);
       base.scale.y = 0.35;
       base.position.y = height * 0.175;
       base.castShadow = true;
@@ -262,43 +423,45 @@ export class ServiceMap {
       body.position.y = height / 2 + 0.06;
       body.castShadow = true;
       body.receiveShadow = true;
-      const capMat = new THREE.MeshStandardMaterial({ color: STATUS_COLORS.healthy, emissive: STATUS_COLORS.healthy, emissiveIntensity: 0.18, roughness: 0.35 });
+      const capMat = new THREE.MeshStandardMaterial({ color: STATUS_COLORS.healthy, emissive: STATUS_COLORS.healthy, emissiveIntensity: 0.1, roughness: 0.35 });
       const cap = new THREE.Mesh(capGeometry(shape), capMat);
       cap.position.y = height + 0.1;
       cap.castShadow = true;
-      lift.add(base, body, cap);
+      const icon = new THREE.Mesh(
+        new THREE.PlaneGeometry(ICON_SIZE[shape], ICON_SIZE[shape]),
+        new THREE.MeshBasicMaterial({ map: iconTexture(this.fixture.nodeIcons[id]), transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 }),
+      );
+      icon.rotation.x = -Math.PI / 2;
+      icon.position.y = height + 0.16;
+      lift.add(base, body, cap, icon);
 
       const beamMat = new THREE.MeshBasicMaterial({ color: STATUS_COLORS.critical, alphaMap: this.beamTexture, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
-      const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.05, 3.2, 40, 1, true), beamMat);
-      beam.position.y = height + 1.6;
+      const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.0 * S, 1.15 * S, 3.4, 40, 1, true), beamMat);
+      beam.position.y = height + 1.7;
       lift.add(beam);
 
       const pulses = [0, 1].map(() => {
         const mat = new THREE.MeshBasicMaterial({ color: STATUS_COLORS.critical, map: this.ringTexture, transparent: true, opacity: 0, depthWrite: false });
-        const ring = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 3.4), mat);
+        const ring = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 4.2), mat);
         ring.rotation.x = -Math.PI / 2;
         ring.position.y = 0.03;
         group.add(ring);
         return ring;
       });
 
-      const halo = dashedRing(1.55, STATUS_COLORS.suspect);
+      const halo = dashedRing(1.85, STATUS_COLORS.suspect);
       halo.position.y = 0.04;
       group.add(halo);
 
-      const el = document.createElement('div');
-      el.className = 'map3d-label';
-      el.innerHTML = `<div class="map3d-card"><span class="map3d-dot"></span><strong>${data.name}</strong><small></small><em hidden></em></div>`;
-      const label = new CSS2DObject(el);
-      label.center.set(0.5, 1);
-      label.position.y = height + 0.75;
-      lift.add(label);
+      const tag = label('map3d-label', `<div class="map3d-card"><span class="map3d-dot"></span><strong>${data.name}</strong><small></small><em hidden></em><div class="map3d-hyp" hidden></div></div>`, [0.5, 1]);
+      tag.position.y = height + 0.85;
+      lift.add(tag);
 
       [base, body, cap].forEach((mesh) => { mesh.userData.nodeId = id; });
       this.scene.add(group);
       this.nodes.set(id, {
-        id, data, shape, height, group, lift, cap, capMat, beam, beamMat, pulses, halo, el, label, home,
-        status: 'healthy', color: new THREE.Color(STATUS_COLORS.healthy), raise: 0, hover: 0, pulse: 0, introY: 0,
+        id, data, shape, height, group, lift, capMat, beam, beamMat, pulses, halo, el: tag.element, home,
+        status: 'healthy', color: new THREE.Color(STATUS_COLORS.healthy), raise: 0, hover: 0, introY: 0,
         pickables: [base, body, cap],
       });
     }));
@@ -309,61 +472,121 @@ export class ServiceMap {
     this.edges = new Map();
     this.edgeMat = new THREE.MeshStandardMaterial({ color: t.edge, roughness: 0.6 });
     this.fixture.edges.forEach(([from, to, kind]) => {
-      const a = this.nodes.get(from);
       const b = this.nodes.get(to);
-      const start = a.home.clone().setY(a.height + 0.16);
-      const end = b.home.clone().setY(b.height + 0.16);
+      const end = b.home.clone().setY(b.height + 0.18);
+      const start = from === 'crowd'
+        ? new THREE.Vector3(this.field.right, 0.3, b.home.z)
+        : this.nodes.get(from).home.clone().setY(this.nodes.get(from).height + 0.18);
       const dist = start.distanceTo(end);
-      const lift = 0.55 + dist * 0.13 + (kind === 'reroute' ? 0.9 : 0);
-      const dir = end.clone().sub(start).multiplyScalar(0.28);
-      const curve = new THREE.CubicBezierCurve3(
-        start,
-        start.clone().add(dir).add(new THREE.Vector3(0, lift, 0)),
-        end.clone().sub(dir).add(new THREE.Vector3(0, lift, 0)),
-        end,
-      );
-      const geometry = new THREE.TubeGeometry(curve, 72, kind === 'reroute' ? 0.08 : 0.06, 10, false);
+      const curve = arc(start, end, 0.6 + dist * 0.12 + (kind === 'reroute' ? 1.4 : 0));
+      const geometry = new THREE.TubeGeometry(curve, 80, kind === 'reroute' ? 0.09 : 0.065, 10, false);
       const material = kind === 'reroute'
-        ? new THREE.MeshStandardMaterial({ color: STATUS_COLORS.proposed, emissive: STATUS_COLORS.proposed, emissiveIntensity: 0.35, roughness: 0.4, transparent: true, opacity: 1 })
+        ? new THREE.MeshStandardMaterial({ color: STATUS_COLORS.proposed, emissive: STATUS_COLORS.proposed, emissiveIntensity: 0.35, roughness: 0.4 })
         : this.edgeMat.clone();
+      material.transparent = true;
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true;
       const total = geometry.index.count;
       geometry.setDrawRange(0, kind === 'reroute' ? 0 : total);
       this.scene.add(mesh);
-      this.edges.set(`${from}>${to}`, { from, to, kind, curve, length: curve.getLength(), mesh, material, total, draw: kind === 'reroute' ? 0 : 1, alert: 0 });
+      this.edges.set(`${from}>${to}`, { from, to, kind, curve, length: curve.getLength(), mesh, material, total, draw: kind === 'reroute' ? 0 : 1, alert: 0, bug: from === 'gb' && to === 'bankx' });
     });
   }
 
+  buildTwin() {
+    this.twin = new THREE.Group();
+    this.scene.add(this.twin);
+    this.twinMats = {
+      body: new THREE.MeshStandardMaterial({ color: '#a39cf3', emissive: '#8178d8', emissiveIntensity: 0.35, roughness: 0.3, transparent: true, opacity: 0, depthWrite: false }),
+      line: new THREE.LineBasicMaterial({ color: '#6c62d6', transparent: true, opacity: 0 }),
+      tube: new THREE.MeshBasicMaterial({ color: '#8f86ea', transparent: true, opacity: 0, depthWrite: false }),
+      drop: new THREE.LineDashedMaterial({ color: '#8178d8', dashSize: 0.22, gapSize: 0.18, transparent: true, opacity: 0 }),
+      deck: new THREE.MeshBasicMaterial({ color: '#8178d8', map: radialTexture([[0, 0.28], [0.75, 0.12], [1, 0]]), transparent: true, opacity: 0, depthWrite: false }),
+    };
+    const ids = [...new Set(this.fixture.twinEdges.flat())];
+    this.twinNodes = new Map();
+    const tint = { gb: '#ff8f7d', bankx: '#ff8f7d', gc: '#5fd3c2', bankz: '#5fd3c2' };
+    this.twinTinted = [];
+    ids.forEach((id) => {
+      const node = this.nodes.get(id);
+      const top = node.home.clone().setY(TWIN_LIFT);
+      const geometry = shapeGeometry(node.shape, 0.92);
+      const material = tint[id] ? this.twinMats.body.clone() : this.twinMats.body;
+      if (tint[id]) {
+        material.color.set(tint[id]);
+        material.emissive.set(tint[id]);
+        this.twinTinted.push(material);
+      }
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.copy(top).setY(TWIN_LIFT + node.height / 2);
+      const outline = new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 30), this.twinMats.line);
+      outline.position.copy(mesh.position);
+      const drop = new THREE.Line(new THREE.BufferGeometry().setFromPoints([node.home.clone().setY(node.height + 1.6), top.clone()]), this.twinMats.drop);
+      drop.computeLineDistances();
+      this.twin.add(mesh, outline, drop);
+      this.twinNodes.set(id, { home: top, height: node.height });
+    });
+    const xs = ids.map((id) => this.nodes.get(id).home.x);
+    const zs = ids.map((id) => this.nodes.get(id).home.z);
+    const deck = new THREE.Mesh(new THREE.PlaneGeometry(Math.max(...xs) - Math.min(...xs) + 7, Math.max(...zs) - Math.min(...zs) + 6), this.twinMats.deck);
+    deck.rotation.x = -Math.PI / 2;
+    deck.position.set((Math.max(...xs) + Math.min(...xs)) / 2, TWIN_LIFT - 0.05, (Math.max(...zs) + Math.min(...zs)) / 2);
+    this.twin.add(deck);
+
+    this.fixture.twinEdges.forEach(([from, to]) => {
+      const a = this.twinNodes.get(from);
+      const b = this.twinNodes.get(to);
+      const curve = arc(a.home.clone().setY(TWIN_LIFT + a.height + 0.1), b.home.clone().setY(TWIN_LIFT + b.height + 0.1), 0.9);
+      const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 60, 0.055, 8, false), this.twinMats.tube);
+      this.twin.add(mesh);
+      this.edges.set(`~${from}>~${to}`, { from: `~${from}`, to: `~${to}`, kind: 'twin', curve, length: curve.getLength(), mesh, total: 0, draw: 0, alert: 0, bug: from === 'gb' && to === 'bankx' });
+    });
+
+    const tests = Object.fromEntries(this.fixture.tests.map((test) => [test.id, test]));
+    const deckLabel = label('map3d-twin-title', `<div class="map3d-card"><b>Digital twin</b><span>Synthetic transfers only · no customer money</span></div>`, [0.5, 1]);
+    deckLabel.center.set(1, 0.5);
+    deckLabel.position.copy(this.twinNodes.get('router').home).add(new THREE.Vector3(-2.2, 1.2, 0));
+    const fail = label('map3d-result fail', `<div class="map3d-card"><i>✕</i><div><strong>Through Gateway B</strong><span>${tests['T-01'].runs} reproduced · ack timeout</span></div></div>`, [0.5, 1]);
+    fail.position.copy(this.edges.get('~gb>~bankx').curve.getPointAt(0.5)).add(new THREE.Vector3(0, 0.5, 0));
+    const pass = label('map3d-result pass', `<div class="map3d-card"><i>✓</i><div><strong>Gateway C control</strong><span>${tests['T-02'].runs} reproduced · healthy</span></div></div>`, [0, 0.5]);
+    pass.position.copy(this.twinNodes.get('bankz').home).add(new THREE.Vector3(1.7, 0.6, 0));
+    this.twinLabels = [deckLabel, fail, pass];
+    this.twinLabels.forEach((item) => this.twin.add(item));
+  }
+
   buildParticles() {
-    const geometry = new THREE.SphereGeometry(0.13, 14, 10);
+    const geometry = new THREE.SphereGeometry(0.14, 14, 10);
     const material = new THREE.MeshBasicMaterial({ toneMapped: false });
     this.particles = new THREE.InstancedMesh(geometry, material, PARTICLE_COUNT);
     this.particles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.particles.frustumCulled = false;
     this.particleState = [];
-    const color = new THREE.Color();
     for (let i = 0; i < PARTICLE_COUNT; i += 1) {
-      this.particles.setColorAt(i, color.copy(COLORS.teal));
-      this.particleState.push({ alive: false, wait: Math.random() * 2.6 });
+      this.particles.setColorAt(i, COLORS.teal);
+      this.particleState.push({ alive: false, wait: Math.random() * 3 });
     }
     this.scene.add(this.particles);
-    this.tmpMatrix = new THREE.Matrix4();
-    this.tmpQuat = new THREE.Quaternion();
-    this.tmpScale = new THREE.Vector3();
-    this.tmpPos = new THREE.Vector3();
-    this.tmpColor = new THREE.Color();
   }
 
-  buildEffects() {
-    this.sparks = [0, 1, 2].map(() => {
+  buildStoryMarkers() {
+    this.sparks = [0, 1, 2, 3].map(() => {
       const mat = new THREE.MeshBasicMaterial({ color: STATUS_COLORS.critical, map: this.ringTexture, transparent: true, opacity: 0, depthWrite: false });
-      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6), mat);
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 1.8), mat);
       this.scene.add(mesh);
       return { mesh, mat, life: 1 };
     });
     this.sparkIndex = 0;
     this.lastSpark = 0;
+
+    const bug = this.edges.get('gb>bankx');
+    const breakPoint = bug.curve.getPointAt(0.88);
+    this.breakRing = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.07, 10, 32), new THREE.MeshBasicMaterial({ color: STATUS_COLORS.critical, transparent: true, opacity: 0, toneMapped: false }));
+    this.breakRing.position.copy(breakPoint);
+    this.breakRing.lookAt(breakPoint.clone().add(bug.curve.getTangentAt(0.88)));
+    this.scene.add(this.breakRing);
+    this.bugMarker = label('map3d-bug', '', [0.5, 0]);
+    this.bugMarker.position.copy(bug.curve.getPointAt(0.5)).setY(0).add(new THREE.Vector3(0, 0, 1.3));
+    this.scene.add(this.bugMarker);
 
     const blastTexture = radialTexture([[0, 0.05], [0.7, 0.22], [0.93, 0.9], [1, 0]]);
     this.blastMat = new THREE.MeshBasicMaterial({ color: STATUS_COLORS.critical, map: blastTexture, transparent: true, opacity: 0, depthWrite: false });
@@ -371,22 +594,15 @@ export class ServiceMap {
     this.blast.rotation.x = -Math.PI / 2;
     this.blast.position.copy(this.nodes.get('bankx').home).setY(0.05);
     this.scene.add(this.blast);
-    this.blastLevel = 0;
 
-    const { complained, affected } = this.fixture.impact;
-    const format = new Intl.NumberFormat('en-NG');
-    this.blastCallout = document.createElement('div');
-    this.blastCallout.className = 'map3d-callout';
-    this.blastCallout.innerHTML = `<div class="map3d-card"><span>Blast radius</span><strong>${format.format(affected)}</strong><small>customers affected · ${format.format(complained)} complained</small></div>`;
-    this.host.appendChild(this.blastCallout);
+    const reroute = this.edges.get('gc>bankx');
+    this.lock = label('map3d-lock', '', [0, 0.5]);
+    this.lock.position.copy(reroute.curve.getPointAt(0.66)).add(new THREE.Vector3(0.7, 0, 0));
+    this.scene.add(this.lock);
 
-    const release = document.createElement('div');
-    release.className = 'map3d-badge';
-    release.innerHTML = '<div class="map3d-card">App v4.2 released</div>';
-    this.releaseLabel = new CSS2DObject(release);
-    this.releaseLabel.center.set(0, 0.5);
-    this.releaseLabel.position.copy(this.nodes.get('app').home).add(new THREE.Vector3(1.15, 0.3, 0.5));
-    this.scene.add(this.releaseLabel);
+    this.release = label('map3d-badge', `<div class="map3d-card"><b>App v4.2</b> released at 10:42</div>`, [0.5, 0]);
+    this.release.position.copy(this.nodes.get('app').home).add(new THREE.Vector3(0, 0, 1.7));
+    this.scene.add(this.release);
   }
 
   buildMascots() {
@@ -399,16 +615,16 @@ export class ServiceMap {
     const shadowTexture = radialTexture([[0, 0.5], [0.5, 0.22], [1, 0]]);
     const make = (agent, modes) => {
       const frames = Object.fromEntries(Object.entries(modes).map(([mode, list]) => [mode, list.map((frame) => load(agent, frame))]));
-      const material = new THREE.SpriteMaterial({ map: Object.values(frames)[0][0], transparent: true, depthWrite: false, opacity: 1 });
+      const material = new THREE.SpriteMaterial({ map: Object.values(frames)[0][0], transparent: true, depthWrite: false });
       const sprite = new THREE.Sprite(material);
       sprite.center.set(0.5, 0.05);
       sprite.scale.setScalar(0.001);
-      const shadow = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.7), new THREE.MeshBasicMaterial({ color: '#523f38', map: shadowTexture, transparent: true, opacity: 0, depthWrite: false }));
+      const shadow = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.8), new THREE.MeshBasicMaterial({ color: '#523f38', map: shadowTexture, transparent: true, opacity: 0, depthWrite: false }));
       shadow.rotation.x = -Math.PI / 2;
       const group = new THREE.Group();
       group.add(sprite, shadow);
       this.scene.add(group);
-      return { agent, frames, mode: Object.keys(modes)[0], sprite, material, shadow, group, size: 0, target: new THREE.Vector3(), visible: false };
+      return { agent, frames, mode: Object.keys(modes)[0], sprite, material, shadow, group, size: 0, visible: false };
     };
     this.mascots = {
       observability: make('observability', { listening: ['listen-a', 'listen-b'], working: ['work-a', 'work-b'], result: ['result'] }),
@@ -437,12 +653,14 @@ export class ServiceMap {
   }
 
   mount(container, { mode = 'full', intro = false } = {}) {
+    const modeChanged = mode !== this.mode;
     this.mode = mode;
     container.appendChild(this.host);
     this.host.dataset.mode = mode;
     this.controls.enableZoom = mode === 'full';
     this.controls.enabled = !(mode === 'compact' && window.matchMedia('(pointer: coarse)').matches);
     this.renderer.domElement.style.touchAction = this.controls.enabled ? 'none' : 'pan-y';
+    if (modeChanged) this.width = 0;
     this.resize();
     if (intro) this.playIntro();
     this.updateLoop(true);
@@ -462,26 +680,78 @@ export class ServiceMap {
     } else if (!shouldRun) this.sleep();
   }
 
-  // Pull the camera back until every board corner sits inside the frame.
-  homeView() {
-    const compact = this.mode === 'compact';
-    const direction = (compact ? new THREE.Vector3(-0.14, 0.52, 0.84) : new THREE.Vector3(-0.2, 0.7, 0.7)).normalize();
-    const target = new THREE.Vector3(0, compact ? 0.2 : 0.6, compact ? 0.3 : 0.7);
+  // Pull the camera back until every point sits inside the frame.
+  setInsets(insets) {
+    const next = { top: 0, right: 0, bottom: 0, left: 0, ...insets };
+    if (Object.keys(next).every((key) => Math.abs(next[key] - this.insets[key]) < 2)) return;
+    this.insets = next;
+    this.width = 0;
+    this.resize();
+  }
+
+  // Shift the projection so the scene centres in the area the overlays leave free.
+  applyViewOffset() {
+    const { top, right, bottom, left } = this.mode === 'full' ? this.insets : { top: 0, right: 0, bottom: 0, left: 0 };
+    if (!top && !right && !bottom && !left) {
+      this.camera.clearViewOffset();
+      return;
+    }
+    this.camera.setViewOffset(this.width, this.height, -(left - right) / 2, -(top - bottom) / 2, this.width, this.height);
+  }
+
+  fit(points, direction, target, margin) {
+    const { top, right, bottom, left } = this.mode === 'full' ? this.insets : { top: 0, right: 0, bottom: 0, left: 0 };
+    const frame = {
+      cx: (left - right) / this.width,
+      cy: (bottom - top) / this.height,
+      rx: ((this.width - left - right) / this.width) * margin,
+      ry: ((this.height - top - bottom) / this.height) * margin,
+    };
     const probe = this.camera.clone();
     const corner = new THREE.Vector3();
-    const margin = compact ? 0.97 : 0.93;
-    let distance = 14;
-    for (; distance < 90; distance += 0.4) {
+    let distance = 8;
+    for (; distance < 160; distance += 0.5) {
       probe.position.copy(target).addScaledVector(direction, distance);
       probe.lookAt(target);
       probe.updateMatrixWorld();
-      const fits = [-12, 12].every((x) => [-7.5, 7.5].every((z) => [0, -0.8].every((y) => {
-        corner.set(x, y, z).project(probe);
-        return Math.abs(corner.x) <= margin && Math.abs(corner.y) <= margin - 0.04;
-      })));
+      const fits = points.every((point) => {
+        corner.copy(point).project(probe);
+        return Math.abs(corner.x - frame.cx) <= frame.rx && Math.abs(corner.y - frame.cy) <= frame.ry;
+      });
       if (fits) break;
     }
     return { position: probe.position.clone(), target };
+  }
+
+  labelPoints(ids, lift = 3.2) {
+    return ids.flatMap((id) => {
+      const node = this.nodes.get(id);
+      return [node.home.clone().setY(node.height + lift), node.home.clone()];
+    });
+  }
+
+  shot(name = 'home') {
+    const compact = this.mode === 'compact';
+    const { minX, maxX, minZ, maxZ } = this.bounds;
+    if (name === 'twin' && !compact) {
+      const twin = [...this.twinNodes.values()].flatMap((node) => [node.home.clone().setY(TWIN_LIFT + node.height + 2.6), node.home.clone().setY(0)]);
+      const title = this.twinNodes.get('router').home.clone().add(new THREE.Vector3(-8, 1, 0));
+      const pass = this.twinNodes.get('bankz').home.clone().add(new THREE.Vector3(7, TWIN_LIFT, 0));
+      return this.fit([...twin, title, pass], new THREE.Vector3(-0.08, 0.5, 0.86).normalize(), new THREE.Vector3(8.5, 4.2, 2.5), 0.94);
+    }
+    if (name === 'reroute' && !compact) {
+      const points = this.labelPoints(['router', 'gb', 'gc', 'bankx', 'bankz', 'ga', 'banky']);
+      return this.fit(points, new THREE.Vector3(-0.14, 0.7, 0.7).normalize(), new THREE.Vector3(9, 0.8, 1.2), 0.9);
+    }
+    const corners = [minX, maxX].flatMap((x) => [minZ, maxZ].flatMap((z) => [new THREE.Vector3(x, 0, z), new THREE.Vector3(x, -0.9, z)]));
+    const labels = compact ? [] : [...this.labelPoints([...this.nodes.keys()]), new THREE.Vector3(this.field.centerX, 1.2, -this.field.half.z)];
+    const direction = (compact ? new THREE.Vector3(-0.06, 0.6, 0.8) : new THREE.Vector3(-0.04, 0.7, 0.72)).normalize();
+    return this.fit([...corners, ...labels], direction, new THREE.Vector3(this.boardCenter.x, 0, compact ? 0.6 : 0.4), compact ? 0.98 : 0.97);
+  }
+
+  currentShot() {
+    if (!this.cinematic || this.mode !== 'full') return this.shot('home');
+    return this.shot(this.state?.shot);
   }
 
   resize() {
@@ -490,20 +760,31 @@ export class ServiceMap {
     const changed = Math.abs(rect.width - (this.width || 0)) > 1 || Math.abs(rect.height - (this.height || 0)) > 1;
     this.width = rect.width;
     this.height = rect.height;
-    this.host.classList.toggle('tight', rect.width < 620);
+    this.host.classList.toggle('tight', rect.width < 760);
     this.renderer.setSize(rect.width, rect.height, false);
     this.labels.setSize(rect.width, rect.height);
     this.camera.aspect = rect.width / rect.height;
     this.camera.updateProjectionMatrix();
+    this.applyViewOffset();
     if (changed && !this.selected && !this.introPlaying) {
-      const home = this.homeView();
-      this.camera.position.copy(home.position);
-      this.controls.target.copy(home.target);
+      this.focusTween?.kill();
+      const view = this.currentShot();
+      this.camera.position.copy(view.position);
+      this.controls.target.copy(view.target);
     }
   }
 
+  fly(view, duration = 1.8) {
+    this.focusTween?.kill();
+    const time = reducedMotion ? 0.01 : duration;
+    this.focusTween = gsap.timeline()
+      .to(this.camera.position, { x: view.position.x, y: view.position.y, z: view.position.z, duration: time, ease: 'power3.inOut' }, 0)
+      .to(this.controls.target, { x: view.target.x, y: view.target.y, z: view.target.z, duration: time, ease: 'power3.inOut' }, 0);
+    this.lastInteraction = performance.now();
+  }
+
   playIntro() {
-    const home = this.homeView();
+    const home = this.currentShot();
     this.introPlaying = true;
     this.clearSelection();
     if (reducedMotion) {
@@ -512,24 +793,24 @@ export class ServiceMap {
       this.introPlaying = false;
       return;
     }
-    const from = home.position.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -0.55).multiplyScalar(1.35).add(new THREE.Vector3(0, 6, 0));
+    const from = home.position.clone().sub(home.target).applyAxisAngle(new THREE.Vector3(0, 1, 0), -0.5).multiplyScalar(1.3).add(home.target).add(new THREE.Vector3(0, 8, 0));
     this.camera.position.copy(from);
     this.controls.target.copy(home.target);
-    gsap.to(this.camera.position, { x: home.position.x, y: home.position.y, z: home.position.z, duration: 2.1, ease: 'expo.out', onComplete: () => { this.introPlaying = false; } });
-
-    gsap.fromTo(this.board.scale, { x: 0.86, y: 0.86, z: 0.86 }, { x: 1, y: 1, z: 1, duration: 1.4, ease: 'expo.out' });
+    gsap.to(this.camera.position, { x: home.position.x, y: home.position.y, z: home.position.z, duration: 2.2, ease: 'expo.out', onComplete: () => { this.introPlaying = false; } });
+    gsap.fromTo(this.board.scale, { x: 0.9, y: 0.9, z: 0.9 }, { x: 1, y: 1, z: 1, duration: 1.4, ease: 'expo.out' });
     [...this.nodes.values()].sort((a, b) => a.home.x - b.home.x || a.home.z - b.home.z).forEach((node, index) => {
-      node.introY = 5.5;
+      node.introY = 6;
       node.group.scale.setScalar(0.4);
-      gsap.to(node, { introY: 0, duration: 1.15, delay: 0.18 + index * 0.06, ease: 'bounce.out' });
-      gsap.to(node.group.scale, { x: 1, y: 1, z: 1, duration: 0.9, delay: 0.18 + index * 0.06, ease: 'back.out(2)' });
+      gsap.to(node, { introY: 0, duration: 1.15, delay: 0.25 + index * 0.06, ease: 'bounce.out' });
+      gsap.to(node.group.scale, { x: 1, y: 1, z: 1, duration: 0.9, delay: 0.25 + index * 0.06, ease: 'back.out(2)' });
     });
-    this.edges.forEach((edge, key) => {
-      if (edge.kind === 'reroute') return;
+    this.people.forEach((person) => { person.lift = -0.6; });
+    this.edges.forEach((edge) => {
+      if (edge.kind !== undefined) return;
       edge.draw = 0;
-      gsap.to(edge, { draw: 1, duration: 1.1, delay: 0.75 + (edge.curve.v0.x + 10) * 0.045, ease: 'power2.inOut' });
+      gsap.to(edge, { draw: 1, duration: 1.1, delay: 0.8 + (edge.curve.v0.x - this.bounds.minX) * 0.03, ease: 'power2.inOut' });
     });
-    this.particleState.forEach((p) => { p.alive = false; p.wait = 1.4 + Math.random() * 2.2; });
+    this.particleState.forEach((p) => { p.alive = false; p.wait = 1.6 + Math.random() * 2.4; });
   }
 
   setTheme(theme) {
@@ -542,12 +823,19 @@ export class ServiceMap {
     this.nodeMat.color.set(t.node);
     this.nodeBaseMat.color.set(t.nodeBase);
     this.gridMat.color.set(t.grid);
-    this.edges.forEach((edge) => { if (edge.kind !== 'reroute') edge.material.color.set(t.edge); });
+    this.districtMat.color.set(t.district);
+    this.crowdNeutral.set(t.crowd);
     this.edgeMat.color.set(t.edge);
+  }
+
+  setCinematic(on) {
+    this.cinematic = on;
+    if (!this.selected && !this.introPlaying) this.fly(this.currentShot(), 1.4);
   }
 
   setStep(step) {
     if (step === this.step) return;
+    const previousShot = this.state?.shot;
     const state = this.fixture.mapStates[step];
     this.step = step;
     this.state = state;
@@ -555,54 +843,104 @@ export class ServiceMap {
 
     this.nodes.forEach((node) => {
       const status = state.status[node.id] || 'healthy';
-      const metric = state.metrics[node.id] || node.data.metric;
-      const tag = state.tags[node.id] || '';
       const changed = status !== node.status;
       node.status = status;
-      node.el.className = `map3d-label status-${status}${this.selected === node.id ? ' selected' : ''}`;
-      node.el.querySelector('small').textContent = metric;
+      node.el.className = `map3d-label status-${status}${this.selected === node.id ? ' selected' : ''}${this.twinNodes.has(node.id) ? ' twinned' : ''}${node.offscreen ? ' offscreen' : ''}`;
+      node.el.querySelector('small').textContent = state.metrics[node.id] || node.data.metric;
       const em = node.el.querySelector('em');
-      em.textContent = tag;
-      em.hidden = !tag;
+      em.textContent = state.tags[node.id] || '';
+      em.hidden = !state.tags[node.id];
+      this.renderHypothesis(node, state.hypotheses[node.id]);
       const color = new THREE.Color(STATUS_COLORS[status]);
       gsap.to(node.color, { r: color.r, g: color.g, b: color.b, duration, ease: 'power2.out' });
-      const raise = status === 'critical' ? 0.5 : status === 'proposed' ? 0.3 : 0;
-      gsap.to(node, { raise, duration: duration * 1.2, ease: 'back.out(2.2)' });
-      gsap.to(node.halo.userData.material, { opacity: status === 'suspect' || status === 'proposed' ? 0.9 : 0, duration });
-      node.halo.userData.material.color.set(status === 'proposed' ? STATUS_COLORS.proposed : STATUS_COLORS.suspect);
+      gsap.to(node, { raise: status === 'critical' ? 0.55 : status === 'proposed' ? 0.35 : 0, duration: duration * 1.2, ease: 'back.out(2.2)' });
+      const halo = node.halo.userData.material;
+      gsap.to(halo, { opacity: status === 'suspect' || status === 'proposed' ? 0.9 : 0, duration });
+      halo.color.set(status === 'proposed' ? STATUS_COLORS.proposed : STATUS_COLORS.suspect);
       if (changed && status !== 'healthy' && duration) {
         gsap.fromTo(node.lift.scale, { x: 1.18, y: 0.78, z: 1.18 }, { x: 1, y: 1, z: 1, duration: 0.9, ease: 'elastic.out(1, 0.4)' });
       }
     });
 
     this.edges.forEach((edge) => {
-      const alert = state.failing && edge.from === 'gb' && edge.to === 'bankx' && state.status.gb === 'critical' ? 1 : 0;
-      gsap.to(edge, { alert, duration });
+      if (edge.kind === 'twin') return;
+      gsap.to(edge, { alert: edge.bug && state.bug === 'alert' ? 1 : 0, duration });
       if (edge.kind === 'reroute') {
-        const draw = state.reroute === 'hidden' ? 0 : 1;
-        gsap.to(edge, { draw, duration: duration * 1.6, ease: 'power3.inOut' });
+        gsap.to(edge, { draw: state.reroute === 'hidden' ? 0 : 1, duration: duration * 1.8, ease: 'power3.inOut' });
         const color = new THREE.Color(state.reroute === 'active' ? STATUS_COLORS.healthy : STATUS_COLORS.proposed);
         gsap.to(edge.material.color, { r: color.r, g: color.g, b: color.b, duration });
         gsap.to(edge.material.emissive, { r: color.r, g: color.g, b: color.b, duration });
       }
     });
-    const gb = this.edges.get('gb>bankx');
-    gsap.to(gb.material, { opacity: state.reroute === 'active' ? 0.35 : 1, duration });
-    gb.material.transparent = true;
+    gsap.to(this.edges.get('gb>bankx').material, { opacity: state.reroute === 'active' ? 0.3 : 1, duration });
 
-    gsap.to(this, { blastLevel: state.blast ? 1 : 0, duration });
-    this.blastCallout.classList.toggle('visible', state.blast);
-    this.releaseLabel.element.classList.toggle('visible', state.release);
+    gsap.to(this, { blastLevel: state.blast ? 1 : 0, twinLevel: state.twin ? 1 : 0, duration: state.twin ? duration * 1.6 : duration, ease: 'power3.inOut' });
+    this.twinLabels.forEach((item) => item.element.classList.toggle('visible', state.twin));
+    this.host.classList.toggle('twin-mode', state.twin);
+    this.crowdTarget = state.customers;
+    this.renderCrowdLabel(state.customers);
+    this.bubbles.forEach((bubble, index) => bubble.element.classList.toggle('visible', index < state.bubbles));
+    this.renderBug(state.bug);
+    this.renderLock(state.lock);
+    this.release.element.classList.toggle('visible', state.release);
     this.placeMascots(step);
+    if (previousShot !== state.shot || this.cinematic) {
+      if (!this.selected && !this.introPlaying && this.host.isConnected && this.width) this.fly(this.currentShot());
+    }
+  }
+
+  renderHypothesis(node, hypothesis) {
+    const el = node.el.querySelector('.map3d-hyp');
+    if (!hypothesis) {
+      el.hidden = true;
+      return;
+    }
+    const data = this.fixture.hypotheses.find((item) => item.id === hypothesis.id);
+    const score = hypothesis.score ?? (hypothesis.state === 'testing' ? 55 : 0);
+    const value = hypothesis.state === 'open' ? 'open' : hypothesis.state === 'testing' ? 'testing' : `${hypothesis.score}%`;
+    el.hidden = false;
+    el.className = `map3d-hyp hyp-${hypothesis.state}`;
+    el.innerHTML = `<div><b>${hypothesis.id}</b><span>${data.short}</span></div><div><i><u style="width:${score}%"></u><s></s></i><em>${hypothesis.state === 'proven' ? '✓ ' : hypothesis.state === 'ruled' ? '✕ ' : ''}${value}</em></div>`;
+  }
+
+  renderCrowdLabel(customers) {
+    const { affected, complained } = this.fixture.impact;
+    const tone = customers.notified ? 'notified' : customers.affected >= 1 ? 'found' : customers.affected > 0 ? 'failing' : 'calm';
+    this.crowdLabel.element.className = `map3d-crowd tone-${tone}`;
+    const counts = customers.affected >= 1 || customers.notified
+      ? `<div class="crowd-counts"><span><b class="wine">${format.format(complained)}</b> complained</span><span><b>${format.format(affected - complained)}</b> never did</span></div>`
+      : '';
+    this.crowdLabel.element.innerHTML = `<div class="map3d-card"><small>${format.format(affected)} customers sending to Bank X</small><strong>${customers.caption}</strong><span>${customers.detail}</span>${counts}</div>`;
+  }
+
+  renderBug(mode) {
+    const el = this.bugMarker.element;
+    el.className = `map3d-bug bug-${mode}`;
+    const copy = {
+      hidden: '',
+      silent: `<div class="map3d-card"><b>Acks stopped · 10:42</b><span>No alert fired. Nobody knows yet.</span></div>`,
+      alert: `<div class="map3d-card">${WARN_ICON}<div><b>ACK TIMEOUT</b><span>Gateway B → Bank X · debits with no credit</span></div></div>`,
+      bypassed: `<div class="map3d-card"><b>Bypassed</b><span>Bank X now routes via Gateway C</span></div>`,
+    }[mode];
+    el.innerHTML = copy;
+  }
+
+  renderLock(mode) {
+    const el = this.lock.element;
+    el.className = `map3d-lock lock-${mode}`;
+    const approval = this.fixture.approvals.find((item) => item.kind === 'Routing change');
+    el.innerHTML = mode === 'hidden' ? '' : mode === 'pending'
+      ? `<div class="map3d-card">${LOCK_ICON}<div><b>Awaiting engineer approval</b><span>${approval.id} · reroute to Gateway C</span></div></div>`
+      : `<div class="map3d-card">${UNLOCK_ICON}<div><b>Approved and applied</b><span>${approval.id} · Ghost Tests rerun green</span></div></div>`;
   }
 
   placeMascots(step) {
     const at = (id, offset) => this.nodes.get(id).home.clone().add(offset);
     const plan = {
-      observability: step <= 2 ? { mode: step === 2 ? 'working' : 'listening', pos: step === 2 ? at('gb', new THREE.Vector3(1.1, 0, -1.9)) : at('api', new THREE.Vector3(-0.2, 0, -1.9)) } : null,
+      observability: step <= 2 ? { mode: step === 2 ? 'working' : 'listening', pos: step === 2 ? at('router', new THREE.Vector3(2.2, 0, -2.6)) : at('api', new THREE.Vector3(1.9, 0, -1.6)) } : null,
       ghost: step === 3 ? { mode: 'working', ride: true } : null,
-      blast: step === 4 || step === 5 ? { mode: step === 4 ? 'working' : 'result', pos: at('bankx', new THREE.Vector3(-0.15, 0, -1.85)) } : null,
-      resolution: step >= 5 ? { mode: step === 5 ? 'listening' : 'result', pos: at('gc', new THREE.Vector3(1.15, 0, 1.1)) } : null,
+      blast: step === 4 || step === 5 ? { mode: step === 4 ? 'working' : 'result', pos: at('bankx', new THREE.Vector3(-0.2, 0, -2.3)) } : null,
+      resolution: step >= 5 ? { mode: step === 5 ? 'listening' : 'result', pos: at('gc', new THREE.Vector3(1.6, 0, 1.3)) } : null,
     };
     Object.entries(this.mascots).forEach(([id, mascot]) => {
       const next = plan[id];
@@ -633,22 +971,14 @@ export class ServiceMap {
     this.clearSelection();
     this.selected = id;
     this.nodes.forEach((node) => node.el.classList.toggle('selected', node.id === id));
-    const duration = reducedMotion ? 0.01 : 1.3;
-    let position;
-    let target;
-    if (id) {
-      const node = this.nodes.get(id);
-      target = node.home.clone().setY(0.6);
-      const offset = this.camera.position.clone().sub(this.controls.target).setLength(13.5);
-      offset.y = Math.max(offset.y, 7.5);
-      position = target.clone().add(offset);
-    } else {
-      ({ position, target } = this.homeView());
+    if (!id) {
+      this.fly(this.currentShot(), 1.3);
+      return;
     }
-    this.focusTween = gsap.timeline()
-      .to(this.camera.position, { x: position.x, y: position.y, z: position.z, duration, ease: 'power3.inOut' }, 0)
-      .to(this.controls.target, { x: target.x, y: target.y, z: target.z, duration, ease: 'power3.inOut' }, 0);
-    this.lastInteraction = performance.now();
+    const target = this.nodes.get(id).home.clone().setY(0.8);
+    const offset = this.camera.position.clone().sub(this.controls.target).setLength(17);
+    offset.y = Math.max(offset.y, 9);
+    this.fly({ position: target.clone().add(offset), target }, 1.3);
   }
 
   focusSuspect() {
@@ -664,7 +994,7 @@ export class ServiceMap {
 
   activeFlows() {
     const state = this.state || this.fixture.mapStates[0];
-    return this.fixture.flows.filter((flow) => !flow.probe || state.probes);
+    return this.fixture.flows.filter((flow) => (flow.probe ? state.probes && this.twinLevel > 0.95 : true));
   }
 
   spawn(p) {
@@ -672,17 +1002,15 @@ export class ServiceMap {
     const total = flows.reduce((sum, flow) => sum + flow.weight, 0);
     let pick = Math.random() * total;
     const flow = flows.find((item) => (pick -= item.weight) < 0) || flows[0];
-    const rerouted = this.state?.reroute === 'active' && flow.rerouted;
     p.flow = flow;
-    p.path = rerouted ? flow.rerouted : flow.path;
+    p.path = this.state?.reroute === 'active' && flow.rerouted ? flow.rerouted : flow.path;
     p.seg = 0;
     p.t = 0;
-    p.speed = (flow.probe ? 3.6 : 2.6) * (0.8 + Math.random() * 0.4) * (reducedMotion ? 0.4 : 1);
+    p.speed = (flow.probe ? 4.2 : 3.4) * (0.8 + Math.random() * 0.4) * (reducedMotion ? 0.4 : 1);
     p.alive = true;
     p.dying = 0;
   }
 
-  // Drop to 1x resolution on machines that cannot hold a smooth frame rate.
   adaptQuality(delta) {
     if (this.renderer.getPixelRatio() <= 1) return;
     this.frameTimes.push(delta);
@@ -710,7 +1038,7 @@ export class ServiceMap {
       this.swayAmount += ((idle ? 1 : 0) - this.swayAmount) * Math.min(1, dt * 0.8);
       if (this.swayAmount > 0.001) {
         const offset = this.camera.position.clone().sub(this.controls.target);
-        offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.cos(this.swayClock * 0.18) * 0.02 * dt * this.swayAmount);
+        offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.cos(this.swayClock * 0.18) * 0.016 * dt * this.swayAmount);
         this.camera.position.copy(this.controls.target).add(offset);
       }
       this.controls.update();
@@ -721,21 +1049,37 @@ export class ServiceMap {
     const hovered = hits[0]?.object.userData.nodeId || null;
     if (hovered !== this.hovered) {
       this.hovered = hovered;
-      this.renderer.domElement.style.cursor = hovered ? 'pointer' : '';
+      this.renderer.domElement.style.cursor = hovered && this.mode === 'full' ? 'pointer' : '';
       this.nodes.forEach((node) => node.el.classList.toggle('hover', node.id === hovered));
     }
 
+    this.updateNodes(dt, time);
+    this.updateEdges(time);
+    this.updateCrowd(dt, time);
+    this.updateParticles(dt, time);
+    this.updateEffects(dt, time);
+    this.updateMascots(dt, time);
+
+    this.renderer.render(this.scene, this.camera);
+    this.labels.render(this.scene, this.camera);
+  }
+
+  updateNodes(dt, time) {
     this.nodes.forEach((node) => {
+      this.tmpPos.copy(node.home).setY(node.height + 1).project(this.camera);
+      const offscreen = Math.abs(this.tmpPos.x) > 0.96 || this.tmpPos.y > 0.98 || this.tmpPos.y < -1;
+      if (offscreen !== node.offscreen) {
+        node.offscreen = offscreen;
+        node.el.classList.toggle('offscreen', offscreen);
+      }
       node.hover += ((node.id === this.hovered || node.id === this.selected ? 1 : 0) - node.hover) * Math.min(1, dt * 10);
       const critical = node.status === 'critical';
-      const bob = critical ? Math.sin(time * 2.2 + node.home.x) * 0.06 : 0;
       node.group.position.y = node.introY;
-      node.lift.position.y = node.raise + node.hover * 0.28 + bob;
+      node.lift.position.y = node.raise + node.hover * 0.3 + (critical ? Math.sin(time * 2.2 + node.home.x) * 0.07 : 0);
       node.capMat.color.copy(node.color);
       node.capMat.emissive.copy(node.color);
       node.capMat.emissiveIntensity = critical ? 0.45 + Math.sin(time * 4.2) * 0.25 : node.status === 'proposed' ? 0.4 + Math.sin(time * 2.4) * 0.15 : 0.1;
       node.beamMat.opacity += ((critical ? 0.12 : 0) - node.beamMat.opacity) * Math.min(1, dt * 4);
-      node.beam.scale.set(1, 1 + Math.sin(time * 3) * 0.04, 1);
       node.pulses.forEach((ring, index) => {
         const phase = (time * 0.62 + index * 0.5) % 1;
         ring.scale.setScalar(0.55 + phase * 1.25);
@@ -743,26 +1087,61 @@ export class ServiceMap {
       });
       node.halo.rotation.y = time * 0.35;
     });
+  }
 
+  updateEdges(time) {
+    const t = THEMES[this.theme];
     this.edges.forEach((edge) => {
+      if (edge.kind === 'twin') return;
       edge.mesh.geometry.setDrawRange(0, Math.floor((edge.total * edge.draw) / 6) * 6);
       if (edge.kind === 'reroute') {
         edge.mesh.visible = edge.draw > 0.002;
         edge.material.emissiveIntensity = this.state?.reroute === 'proposed' ? 0.35 + Math.sin(time * 3) * 0.3 : 0.25;
       } else {
-        const t = THEMES[this.theme];
         this.tmpColor.set(t.edge).lerp(COLORS.coral, edge.alert);
         edge.material.color.copy(this.tmpColor);
         edge.material.emissive.copy(COLORS.coral).multiplyScalar(edge.alert * (0.35 + Math.sin(time * 4) * 0.2));
       }
     });
+    const level = this.twinLevel;
+    this.twin.position.y = (1 - level) * -3.5;
+    this.twin.visible = level > 0.01;
+    this.twinMats.body.opacity = level * 0.5;
+    this.twinTinted.forEach((material) => { material.opacity = level * 0.55; });
+    this.twinMats.line.opacity = level * 0.85;
+    this.twinMats.tube.opacity = level * 0.7;
+    this.twinMats.drop.opacity = level * 0.5;
+    this.twinMats.deck.opacity = level * 0.9;
+    ['~router>~gb', '~gb>~bankx', '~router>~gc', '~gc>~bankz'].forEach((key) => { this.edges.get(key).draw = level; });
+    const bugAlert = this.edges.get('gb>bankx').alert;
+    this.breakRing.material.opacity = bugAlert * (0.65 + Math.sin(time * 5) * 0.3);
+    this.breakRing.scale.setScalar(1 + Math.sin(time * 5) * 0.12);
+  }
 
-    this.updateParticles(dt, time);
-    this.updateEffects(dt, time);
-    this.updateMascots(dt, time);
-
-    this.renderer.render(this.scene, this.camera);
-    this.labels.render(this.scene, this.camera);
+  updateCrowd(dt, time) {
+    const target = this.crowdTarget;
+    const blend = Math.min(1, dt * 2.2);
+    this.people.forEach((person, index) => {
+      const affected = person.threshold < target.affected;
+      const complaining = person.complainer && target.complainers;
+      const goal = target.notified ? COLORS.teal : complaining ? COLORS.wine : affected ? COLORS.coral : this.crowdNeutral;
+      person.color.lerp(goal, blend);
+      person.lift += ((complaining ? 0.42 + Math.sin(time * 3 + person.phase) * 0.08 : 0) - person.lift) * blend;
+      const scale = complaining ? 1.7 : 1;
+      this.tmpPos.set(person.x, Math.max(0.16, 0.16 + person.lift), person.z);
+      this.tmpScale.setScalar(scale);
+      this.tmpMatrix.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
+      this.crowd.setMatrixAt(index, this.tmpMatrix);
+      this.crowd.setColorAt(index, person.color);
+    });
+    this.crowd.instanceMatrix.needsUpdate = true;
+    this.crowd.instanceColor.needsUpdate = true;
+    const ringOpacity = target.complainers && !target.notified ? 0.75 : 0;
+    this.complainerRings.forEach((ring, index) => {
+      const phase = (time * 0.7 + index * 0.13) % 1;
+      ring.material.opacity += ((ringOpacity * (1 - phase)) - ring.material.opacity) * 0.3;
+      ring.scale.setScalar(1 + phase * 1.6);
+    });
   }
 
   updateParticles(dt, time) {
@@ -777,26 +1156,28 @@ export class ServiceMap {
           return;
         }
       }
-      const from = p.path[p.seg];
-      const to = p.path[p.seg + 1];
-      const edge = this.edges.get(`${from}>${to}`);
-      if (!edge || (edge.kind !== 'reroute' && edge.draw < 0.98)) {
-        p.alive = false; p.wait = 0.4; return;
+      const edge = this.edges.get(`${p.path[p.seg]}>${p.path[p.seg + 1]}`);
+      if (!edge || edge.draw < 0.98) {
+        p.alive = false;
+        p.wait = 0.5;
+        this.tmpMatrix.makeScale(0, 0, 0);
+        this.particles.setMatrixAt(index, this.tmpMatrix);
+        return;
       }
-      const failingSeg = state.failing && p.flow.failing && from === 'gb' && to === 'bankx';
+      const failingSeg = edge.bug && p.flow.failing && (edge.kind === 'twin' || state.failing);
       if (p.dying > 0) {
         p.dying -= dt * 2.6;
-        if (p.dying <= 0) { p.alive = false; p.wait = Math.random() * 1.2; }
+        if (p.dying <= 0) { p.alive = false; p.wait = Math.random() * 1.4; }
       } else {
         p.t += (p.speed * dt) / edge.length;
-        if (failingSeg && p.t >= 0.9) {
-          p.t = 0.9;
+        if (failingSeg && p.t >= 0.88) {
+          p.t = 0.88;
           p.dying = 1;
-          this.spark(edge.curve.getPointAt(0.95), time);
+          this.spark(edge.curve.getPointAt(0.9), time);
         } else if (p.t >= 1) {
           p.seg += 1;
           p.t = 0;
-          if (p.seg >= p.path.length - 1) { p.alive = false; p.wait = 0.3 + Math.random() * 2.4; }
+          if (p.seg >= p.path.length - 1) { p.alive = false; p.wait = 0.3 + Math.random() * 2.6; }
         }
       }
       if (!p.alive) {
@@ -805,22 +1186,23 @@ export class ServiceMap {
         return;
       }
       edge.curve.getPointAt(Math.min(1, p.t), this.tmpPos);
-      this.tmpPos.y += 0.04;
-      const scale = (p.flow.probe ? 1.15 : 1) * (p.dying > 0 ? p.dying : 1) * Math.min(1, p.t * 6 + (p.seg > 0 ? 1 : 0));
+      this.tmpPos.y += 0.05;
+      if (edge.kind === 'twin') this.tmpPos.y += this.twin.position.y;
+      const scale = (p.flow.probe ? 1.1 : 1) * (p.dying > 0 ? p.dying : 1) * Math.min(1, p.t * 6 + (p.seg > 0 ? 1 : 0));
       this.tmpScale.setScalar(scale);
       this.tmpMatrix.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
       this.particles.setMatrixAt(index, this.tmpMatrix);
-      if (p.flow.probe) this.tmpColor.copy(COLORS.violet);
-      else if (failingSeg) this.tmpColor.copy(COLORS.teal).lerp(COLORS.coral, Math.min(1, p.t * 1.6));
-      else this.tmpColor.copy(COLORS.teal);
+      const base = p.flow.probe ? COLORS.violet : COLORS.teal;
+      this.tmpColor.copy(base);
+      if (failingSeg) this.tmpColor.lerp(COLORS.coral, Math.min(1, p.t * 1.5));
       this.particles.setColorAt(index, this.tmpColor);
     });
     this.particles.instanceMatrix.needsUpdate = true;
-    if (this.particles.instanceColor) this.particles.instanceColor.needsUpdate = true;
+    this.particles.instanceColor.needsUpdate = true;
   }
 
   spark(position, time) {
-    if (time - this.lastSpark < 0.18) return;
+    if (time - this.lastSpark < 0.15) return;
     this.lastSpark = time;
     const spark = this.sparks[this.sparkIndex++ % this.sparks.length];
     spark.mesh.position.copy(position);
@@ -834,33 +1216,31 @@ export class ServiceMap {
       spark.mesh.scale.setScalar(0.3 + spark.life * 1.1);
       spark.mat.opacity = (1 - spark.life) * 0.9;
     });
-    const phase = (time * 0.38) % 1;
-    this.blast.scale.setScalar(1 + phase * 12);
-    this.blastMat.opacity = this.blastLevel * (1 - phase) * 0.55;
+    const phase = (time * 0.36) % 1;
+    this.blast.scale.setScalar(1 + phase * 15);
+    this.blastMat.opacity = this.blastLevel * (1 - phase) * 0.5;
   }
 
   updateMascots(dt, time) {
     Object.values(this.mascots).forEach((mascot) => {
-      const size = Math.max(0.0001, mascot.size * 1.75);
       const frames = mascot.frames[mascot.mode] || Object.values(mascot.frames)[0];
-      const period = mascot.mode === 'working' ? 0.42 : 0.7;
-      const frame = frames[Math.floor(time / period) % frames.length];
+      const frame = frames[Math.floor(time / (mascot.mode === 'working' ? 0.42 : 0.7)) % frames.length];
       if (mascot.material.map !== frame) mascot.material.map = frame;
       if (mascot.ride) {
-        const edges = [this.edges.get('router>gb'), this.edges.get('gb>bankx')];
+        const route = [this.edges.get('~router>~gb'), this.edges.get('~gb>~bankx')];
         const loop = (time * 0.12) % 2;
-        const edge = edges[Math.floor(loop)];
-        edge.curve.getPointAt(loop % 1, this.tmpPos);
-        mascot.group.position.lerp(this.tmpPos.setY(0), Math.min(1, dt * 6));
-        mascot.sprite.position.y = edge.curve.getPointAt(loop % 1).y + 0.15;
+        const point = route[Math.floor(loop)].curve.getPointAt(loop % 1);
+        this.tmpPos.copy(point).setY(0);
+        mascot.group.position.lerp(this.tmpPos, Math.min(1, dt * 6));
+        mascot.sprite.position.y = point.y + this.twin.position.y + 0.12;
+        mascot.shadow.position.y = TWIN_LIFT + this.twin.position.y - 0.02;
       } else {
-        const bob = mascot.mode === 'result' ? Math.abs(Math.sin(time * 2.4)) * 0.22 : Math.sin(time * 1.8) * 0.06;
-        mascot.sprite.position.y = 0.05 + bob;
+        mascot.sprite.position.y = 0.05 + (mascot.mode === 'result' ? Math.abs(Math.sin(time * 2.4)) * 0.24 : Math.sin(time * 1.8) * 0.06);
+        mascot.shadow.position.y = 0.02;
       }
-      mascot.sprite.scale.setScalar(size);
+      mascot.sprite.scale.setScalar(Math.max(0.0001, mascot.size * 2.1));
       mascot.shadow.scale.setScalar(Math.max(0.0001, mascot.size));
       mascot.shadow.material.opacity = mascot.size * 0.55;
-      mascot.shadow.position.y = 0.02;
     });
   }
 }
