@@ -249,6 +249,7 @@ function render() {
   };
   const content = state.loading ? loadingView() : views[state.view]();
   const html = shell(content);
+  document.documentElement.dataset.screen = state.view;
   if (!mounted) {
     app.innerHTML = html;
     mounted = true;
@@ -274,6 +275,7 @@ function render() {
     });
   }
   tickClocks();
+  drawApprovalPrompt();
   const entering = !state.loading && lastView !== state.view;
   mountMap(entering);
   if (!state.loading) {
@@ -824,6 +826,69 @@ function showToast(message, tone = 'ok') {
   toastTimer = window.setTimeout(() => { toastRegion.innerHTML = ''; }, tone === 'ok' ? 3600 : 6000);
 }
 
+// When Resolution is waiting on a human, ask for the decision outright instead of letting the moment pass.
+const promptRegion = document.createElement('div');
+promptRegion.className = 'approval-prompt-region';
+document.body.appendChild(promptRegion);
+const dismissedPrompts = new Set();
+
+function pendingReroute() {
+  if (currentStep() !== 5) return null;
+  if (isLive()) return D.approvals.find((item) => item.rawKind === 'config' && item.status === 'pending') || null;
+  const item = fixture.approvals.find((approval) => approval.kind === 'Routing change');
+  return item && state.approvals[item.id] === 'pending' ? item : null;
+}
+
+function drawApprovalPrompt() {
+  const pending = state.loading || state.view === 'approvals' ? null : pendingReroute();
+  const item = pending && !dismissedPrompts.has(pending.id) ? pending : null;
+  const session = item && isLive() ? auth.get(item.requiredRole) : null;
+  const key = item ? [item.id, state.busy, Boolean(session)].join('|') : '';
+  if (key === promptRegion.dataset.key) return;
+  promptRegion.dataset.key = key;
+  if (!item) {
+    promptRegion.innerHTML = '';
+    return;
+  }
+  const reason = isLive() ? approvalReason(item) : `The digital twin passed ${D.fixPlan.simulationSuccess}% of synthetic transfers through Gateway C. Rollback is automatic if errors rise.`;
+  const signedIn = !isLive() || session;
+  promptRegion.innerHTML = `
+    <section class="approval-prompt" role="alertdialog" aria-labelledby="approval-prompt-title" aria-describedby="approval-prompt-reason">
+      <img src="/assets/agents/resolution/agent-listen-a.png" alt=""/>
+      <div class="prompt-body">
+        <span class="prompt-agent"><i></i>Resolution · Waiting for approval</span>
+        <h2 id="approval-prompt-title">${item.title}</h2>
+        <p id="approval-prompt-reason">${reason}</p>
+        <small>Only ${item.owner} can approve this. Nothing changes in production until you do.${session ? ` Signed in as ${session.sub}.` : ''}</small>
+        <div class="prompt-actions">
+          <button class="primary-button" data-prompt="approve" ${state.busy ? 'disabled' : ''}>${state.busy === 'decide' || state.busy === 'signin' ? 'Recording decision…' : signedIn ? 'Approve reroute' : `Sign in & approve`}</button>
+          <button class="secondary-button" data-prompt="review">Review details</button>
+          <button class="text-button inline" data-prompt="later">Later</button>
+        </div>
+      </div>
+    </section>`;
+}
+
+promptRegion.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-prompt]');
+  const item = button && pendingReroute();
+  if (!item) return;
+  state.activeApproval = item.id;
+  const choice = button.dataset.prompt;
+  if (choice === 'later') {
+    dismissedPrompts.add(item.id);
+    drawApprovalPrompt();
+  } else if (choice === 'review') {
+    navigate('approvals');
+  } else if (!isLive()) {
+    decide('approved');
+  } else {
+    if (!auth.get(item.requiredRole)) await authAction('signin', item.requiredRole);
+    if (auth.get(item.requiredRole)) await decideLive('approve');
+    else navigate('approvals');
+  }
+});
+
 function setStep(step) {
   state.demoStep = Math.max(0, Math.min(step, fixture.demoSteps.length - 1));
   render();
@@ -841,7 +906,8 @@ function togglePlay(fromPanel = false) {
     if (fromPanel) state.demoOpen = true;
     if (state.demoStep === fixture.demoSteps.length - 1) state.demoStep = 0;
     playTimer = window.setInterval(() => {
-      if (state.demoStep >= fixture.demoSteps.length - 1) {
+      // Playback stops at the approval gate: the reroute needs a human decision before it can resolve.
+      if (state.demoStep >= fixture.demoSteps.length - 1 || pendingReroute()) {
         clearInterval(playTimer);
         state.playing = false;
       } else state.demoStep += 1;
@@ -1135,20 +1201,31 @@ store.subscribe(() => {
   liveRender();
 });
 
-// Initial history replays instantly; once the stream goes quiet, show the current state
-// directly. After that, new progress is paced through visible handoffs.
+// Records stamped before this page connected are history: show their outcome at once.
+// Only progress happening now is paced through visible handoffs.
+let connectedAt = Date.now();
+let catchingUp = true;
+function noteRecord(record) {
+  if (catchingUp && Date.parse(record.occurred_at) >= connectedAt - 15000) {
+    catchingUp = false;
+    director.sync(store.step());
+  }
+}
+
+
 let lastRecordAt = 0;
 let streamOpenedAt = 0;
+// Fallback: if the stream goes quiet, history is done even if every record was old.
 window.setInterval(() => {
-  if (!isLive() || director.synced || !streamOpenedAt) return;
-  const quietFor = Date.now() - Math.max(lastRecordAt, streamOpenedAt);
-  if (quietFor > 900) {
+  if (!isLive() || !catchingUp || !streamOpenedAt) return;
+  if (Date.now() - Math.max(lastRecordAt, streamOpenedAt) > 1500) {
+    catchingUp = false;
     director.sync(store.step());
     render();
   }
 }, 300);
 
-director.start(() => ({ D: liveModel(), step: isLive() ? store.step() : state.demoStep, ctx: agentContext(), paced: isLive() }));
+director.start(() => ({ D: liveModel(), step: isLive() ? store.step() : state.demoStep, ctx: agentContext(), paced: isLive() && !catchingUp, quiet: isLive() && catchingUp }));
 director.subscribe((kind) => {
   if (kind === 'step' || kind === 'beat') liveRender();
 });
@@ -1180,10 +1257,15 @@ async function connect() {
   }
   live.mode = 'live';
   live.error = null;
+  connectedAt = Date.now();
+  catchingUp = true;
   live.closeStream?.();
   live.closeStream = openStream({
     after: store.lastSequence,
-    onRecord: (record) => store.ingest(record),
+    onRecord: (record) => {
+      store.ingest(record);
+      noteRecord(record);
+    },
     onOpen: () => { live.stream = 'open'; streamOpenedAt ||= Date.now(); liveRender(); },
     onError: () => { live.stream = 'reconnecting'; liveRender(); },
   });

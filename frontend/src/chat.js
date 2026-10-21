@@ -1,11 +1,14 @@
 // Agent channel: agents post what they are doing; engineers can ask any of them a question.
 // Built once outside the app root so live re-renders never interrupt a conversation.
 
-import { AGENTS, agentById, answer } from './agents.js';
+import { AGENTS, agentById, answer, taggedAgents } from './agents.js';
 
 const escape = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const time = (date) => date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const avatar = (id, mode = 'idle') => `/assets/agents/${id}/agent-${mode}.png`;
+const HANDLES = { observability: 'Observability', ghost: 'GhostTest', blast: 'BlastRadius', resolution: 'Resolution' };
+// Escape first, then mark @tags so engineers can see who they addressed.
+const highlight = (text) => escape(text).replace(/@([\w-]+)/g, (match, name) => (taggedAgents(match).length ? `<mark>@${name}</mark>` : match));
 
 export function createChat({ director, context }) {
   const root = document.createElement('div');
@@ -18,7 +21,7 @@ export function createChat({ director, context }) {
     </button>
     <section class="chat-panel" id="agent-chat-panel" aria-label="Agent channel" hidden>
       <header class="chat-head">
-        <div><span class="chat-live"><i></i> Live</span><strong>Agent channel</strong><small>Agents report every 5 seconds. Ask them anything about the incident.</small></div>
+        <div><span class="chat-live"><i></i> Live</span><strong>Agent channel</strong><small>Agents report every 5 seconds. Type @ to tag one; only tagged agents reply.</small></div>
         <button type="button" data-chat-close aria-label="Close agent channel">×</button>
       </header>
       <div class="chat-roster" role="tablist" aria-label="Ask an agent">
@@ -28,7 +31,8 @@ export function createChat({ director, context }) {
       <ol class="chat-log" aria-live="polite"></ol>
       <div class="chat-suggestions">${['What are you doing?', 'How many customers are affected?', 'What is pending approval?', 'Why are you confident?'].map((q) => `<button type="button" data-chat-suggest="${escape(q)}">${q}</button>`).join('')}</div>
       <form class="chat-form">
-        <input name="question" autocomplete="off" maxlength="240" placeholder="Ask the agents…" aria-label="Ask the agents"/>
+        <ul class="mention-menu" role="listbox" aria-label="Tag an agent" hidden>${AGENTS.map((agent) => `<li role="option" data-mention="${agent.id}" style="--agent:${agent.color}"><img src="${avatar(agent.id)}" alt=""/><b>@${HANDLES[agent.id]}</b><small>${agent.name}</small></li>`).join('')}</ul>
+        <input name="question" autocomplete="off" maxlength="240" placeholder="Ask the agents… type @ to tag one" aria-label="Ask the agents"/>
         <button type="submit">Send</button>
       </form>
     </section>`;
@@ -40,6 +44,9 @@ export function createChat({ director, context }) {
   const unread = root.querySelector('.launcher-unread');
   const ticker = root.querySelector('[data-chat-ticker]');
   const input = root.querySelector('input');
+  const menu = root.querySelector('.mention-menu');
+  const options = [...menu.querySelectorAll('[data-mention]')];
+  let menuIndex = 0;
   let target = '';
   let rendered = 0;
   let unseen = 0;
@@ -66,7 +73,7 @@ export function createChat({ director, context }) {
       item.className = `chat-message ${message.agent === 'engineer' ? 'from-engineer' : ''} kind-${message.kind}`;
       item.style.setProperty('--agent', agent?.color || 'var(--wine)');
       item.innerHTML = message.agent === 'engineer'
-        ? `<div class="bubble"><p>${escape(message.text)}</p><time>${time(message.at)}</time></div>`
+        ? `<div class="bubble"><p>${highlight(message.text)}</p><time>${time(message.at)}</time></div>`
         : `<img src="${avatar(message.agent, message.kind === 'handoff' ? 'result' : 'idle')}" alt=""/><div class="bubble"><span>${agent.name}${message.kind === 'handoff' ? ' · handoff' : message.kind === 'answer' ? ' · reply' : ''}</span><p>${escape(message.text)}</p><time>${time(message.at)}</time></div>`;
       log.appendChild(item);
       if (panel.hidden && message.agent !== 'engineer') unseen += 1;
@@ -94,7 +101,8 @@ export function createChat({ director, context }) {
     director.postUser(text);
     root.classList.add('typing');
     const { D, step, ctx } = context();
-    const replies = answer(text, target || null, D, step, ctx);
+    // A tag in the message wins over the roster selection: only tagged agents reply.
+    const replies = answer(text, taggedAgents(text).length ? null : target || null, D, step, ctx);
     replies.forEach((replyItem, index) => {
       window.setTimeout(() => {
         director.post(replyItem.agent, replyItem.text, 'answer');
@@ -102,6 +110,59 @@ export function createChat({ director, context }) {
       }, 650 + index * 750);
     });
   };
+
+  const mentionQuery = () => input.value.slice(0, input.selectionStart ?? input.value.length).match(/(^|\s)@(\w*)$/);
+  const visibleOptions = () => options.filter((option) => !option.hidden);
+  const refreshMenu = () => {
+    const query = mentionQuery();
+    if (!query) {
+      menu.hidden = true;
+      return;
+    }
+    const needle = query[2].toLowerCase();
+    options.forEach((option) => {
+      const id = option.dataset.mention;
+      option.hidden = Boolean(needle) && !(`${HANDLES[id]} ${agentById[id].name} ${id}`.toLowerCase().includes(needle));
+    });
+    const visible = visibleOptions();
+    menu.hidden = !visible.length;
+    menuIndex = Math.min(menuIndex, Math.max(visible.length - 1, 0));
+    visible.forEach((option, index) => option.classList.toggle('active', index === menuIndex));
+  };
+  const pickMention = (id) => {
+    const caret = input.selectionStart ?? input.value.length;
+    const before = input.value.slice(0, caret).replace(/@\w*$/, `@${HANDLES[id]} `);
+    input.value = before + input.value.slice(caret).replace(/^\s+/, '');
+    input.setSelectionRange(before.length, before.length);
+    menu.hidden = true;
+    input.focus();
+  };
+  input.addEventListener('input', () => {
+    menuIndex = 0;
+    refreshMenu();
+  });
+  input.addEventListener('keydown', (event) => {
+    if (menu.hidden) return;
+    const visible = visibleOptions();
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      menuIndex = (menuIndex + (event.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length;
+      refreshMenu();
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      if (visible[menuIndex]) pickMention(visible[menuIndex].dataset.mention);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      menu.hidden = true;
+    }
+  });
+  input.addEventListener('blur', () => window.setTimeout(() => { menu.hidden = true; }, 120));
+  menu.addEventListener('mousedown', (event) => {
+    const option = event.target.closest('[data-mention]');
+    if (!option) return;
+    event.preventDefault();
+    pickMention(option.dataset.mention);
+  });
 
   launcher.addEventListener('click', () => setOpen(panel.hidden));
   root.querySelector('[data-chat-close]').addEventListener('click', () => setOpen(false));
@@ -117,7 +178,7 @@ export function createChat({ director, context }) {
       other.classList.toggle('active', other === button);
       other.setAttribute('aria-selected', String(other === button));
     });
-    input.placeholder = target ? `Ask ${agentById[target].name}…` : 'Ask the agents…';
+    input.placeholder = target ? `Ask ${agentById[target].name}…` : 'Ask the agents… type @ to tag one';
     input.focus();
   }));
 

@@ -103,6 +103,7 @@ function emptyRun() {
     resolutions: [],
     feed: [],
     milestones: {},
+    arrived: {},
   };
 }
 
@@ -142,6 +143,7 @@ export class LiveStore {
 
   milestone(key, ts) {
     if (!this.run.milestones[key]) this.run.milestones[key] = ts;
+    if (!this.run.arrived[key]) this.run.arrived[key] = Date.now();
   }
 
   ingest(record) {
@@ -452,7 +454,7 @@ export function viewModel(store, routes, displayStep) {
       elapsed: duration(run.incident?.openedAt, run.lastTs),
       openedAt: clock(run.incident?.openedAt, false),
       firstSignal: clock(m.failure || m.complaint),
-      detected: duration(m.failure || m.complaint, m.incident),
+      detected: detectedIn(run),
     },
     health: { ...base.health, services, throughput, failureAt, transferCount: run.transfers },
     agents,
@@ -490,6 +492,16 @@ export function viewModel(store, routes, displayStep) {
     times: { failure: clock(m.failure, false), release: clock(run.release?.ts, false), openedAt: run.incident?.openedAt || null, firstSignalAt: m.failure || m.complaint || null },
     mapStates: liveMapStates({ step, hypotheses, blast, complained, affected, silent, routes, run, applied, config, failing }),
   };
+}
+
+// Detection time as engineers experienced it: from the first failure reaching the browser to
+// the incident opening. When history is replayed at once, fall back to the backend's timestamps.
+function detectedIn(run) {
+  const m = run.milestones;
+  const a = run.arrived;
+  const start = a.failure || a.complaint;
+  if (start && a.incident && a.incident - start >= 1000) return duration(new Date(start), new Date(a.incident));
+  return duration(m.failure || m.complaint, m.incident);
 }
 
 function shortClaim(hypothesis) {

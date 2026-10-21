@@ -12,7 +12,9 @@ export const agentById = Object.fromEntries(AGENTS.map((agent) => [agent.id, age
 
 const STEP_OWNER = ['observability', 'observability', 'observability', 'ghost', 'blast', 'resolution', 'resolution'];
 const HEARTBEAT_MS = 5000;
-const DWELL_MS = 6000;
+// How long each displayed stage holds before the next handoff. Validation is the slowest on
+// purpose: Ghost Test works through every hypothesis where engineers can follow it.
+const DWELL_MS = { 0: 4000, 1: 9000, 2: 11000, 3: 18000, 4: 10000, 5: 6000 };
 
 const n = (value) => Number(value || 0).toLocaleString('en-NG');
 
@@ -126,9 +128,9 @@ export function agentStatuses(D, step, ctx) {
   } else if (step === 4) {
     status.resolution = { mode: 'listening', headline: 'Planning', lines: [`Preparing containment, patch and reconciliation steps${f.plan ? ` (containment ${f.plan.containmentEta})` : ''}.`] };
   } else if (step === 5) {
-    const next = f.pending[0];
-    status.resolution = { mode: 'waiting', headline: 'Awaiting approval', lines: [
-      next ? `Waiting for ${next.owner} to approve: ${next.title}.` : 'Waiting for an approver.',
+    const next = f.pending.find((item) => item.kind === 'Routing change') || f.pending[0];
+    status.resolution = { mode: 'waiting', headline: 'Waiting for approval', lines: [
+      next ? `Waiting for approval: ${next.title}. Only ${next.owner} can approve this.` : 'Waiting for approval from an authorised engineer.',
       `${f.pending.length} decision${f.pending.length === 1 ? '' : 's'} pending. Nothing changes in production until a human approves.`,
       f.plan?.simulationSuccess != null ? `The reroute passed ${f.plan.simulationSuccess}% of twin transfers. Ready when you are.` : 'The plan is ready in the Fix plan view.',
     ] };
@@ -140,6 +142,15 @@ export function agentStatuses(D, step, ctx) {
     ] };
   }
 
+  if (step === 6) {
+    status.observability = { mode: 'done', headline: 'Done', lines: [`Done. ${n(f.signals)} signals fused, incident ${f.incidentId} closed out. Back to listening.`] };
+    status.ghost = { mode: 'done', headline: 'Done', lines: [f.rerunPassed ? 'Done. The fix is verified: the failure no longer reproduces.' : 'Done validating. The post-fix rerun is still pending.'] };
+    status.blast = { mode: 'done', headline: 'Done', lines: [`Done. ${n(f.impact.affected)} customers found and told first.`] };
+    status.resolution = { mode: 'done', headline: 'Done', lines: [
+      'Done. Bank X transfers now flow through Gateway C and the incident is resolved.',
+      `Follow-ups still open: ${f.pending.length ? `${f.pending.length} approvals, including the connector patch` : 'connector patch review and reconciliation'}.`,
+    ] };
+  }
   AGENTS.forEach(({ id }) => { status[id].active = id === owner; });
   return status;
 }
@@ -149,8 +160,9 @@ const HANDOFFS = {
   2: [['observability', 'Opened an incident and fused the signals into one fingerprint. Writing competing hypotheses now.']],
   3: [['observability', 'Done investigating. Handing my hypotheses to Ghost Test.'], ['ghost', 'Got them. Testing each one in the digital twin with synthetic transfers.']],
   4: [['ghost', 'Validation finished. Handing the validated cause to Blast Radius.'], ['blast', 'On it. Searching every transaction for customers hit by this fingerprint.']],
-  5: [['blast', 'Impact mapped. Handing the plan to Resolution.'], ['resolution', 'Plan ready. I need human approval before anything changes in production.']],
-  6: [['resolution', 'Approved change applied. Asking Ghost Test to verify.'], ['ghost', 'Rerun complete: the failure no longer reproduces. Incident resolved.']],
+  5: [['blast', 'Impact mapped. Handing the plan to Resolution.'], ['resolution', 'Waiting for approval. I will not change anything in production until an engineer approves the reroute.']],
+  6: [['resolution', 'Approval received. Reroute applied. Asking Ghost Test to verify.'], ['ghost', 'Rerun complete: the failure no longer reproduces.'],
+    ['observability', 'Done.'], ['ghost', 'Done.'], ['blast', 'Done.'], ['resolution', 'Done. Incident resolved.']],
 };
 
 // Paces the displayed story so a burst of backend records still reads as distinct handoffs,
@@ -211,16 +223,16 @@ export class AgentDirector {
   }
 
   advance() {
-    const { paced } = this.source();
+    const { paced, quiet } = this.source();
     const target = this.target();
     if (!paced) {
-      if (target !== this.displayStep) this.setDisplay(target, target === this.displayStep + 1);
+      if (target !== this.displayStep) this.setDisplay(target, !quiet && target === this.displayStep + 1);
       return;
     }
     if (!this.synced) return;
     if (target < this.displayStep) {
       this.setDisplay(target, false);
-    } else if (target > this.displayStep && Date.now() - this.stepSince >= DWELL_MS) {
+    } else if (target > this.displayStep && Date.now() - this.stepSince >= (DWELL_MS[this.displayStep] ?? 8000)) {
       this.setDisplay(this.displayStep + 1, true);
     }
   }
@@ -229,7 +241,18 @@ export class AgentDirector {
     this.displayStep = step;
     this.stepSince = Date.now();
     this.refresh();
-    if (announce) (HANDOFFS[step] || []).forEach(([agent, text]) => this.post(agent, text, 'handoff'));
+    // Handoff messages arrive one after another, like a conversation, not as a single burst.
+    // A step that moves on before its handoffs finish flushes them first, so none are lost.
+    window.clearTimeout(this.handoffTimer);
+    (this.handoffQueue || []).forEach(([agent, text]) => this.post(agent, text, 'handoff'));
+    this.handoffQueue = announce ? [...(HANDOFFS[step] || [])] : [];
+    const next = () => {
+      const item = this.handoffQueue.shift();
+      if (!item) return;
+      this.post(item[0], item[1], 'handoff');
+      if (this.handoffQueue.length) this.handoffTimer = window.setTimeout(next, 1400);
+    };
+    next();
     this.emit('step');
   }
 
@@ -266,7 +289,7 @@ export class AgentDirector {
 
 const INTENTS = [
   ['help', /\b(help|what can (i|you)|commands?)\b/],
-  ['greet', /^(hi|hey|hello|yo|good (morning|afternoon|evening))\b/],
+  ['greet', /^$/],
   ['impact', /\b(customers?|impact|affected|how many|silent|exposure|blast|naira|₦|money)\b/],
   ['eta', /\b(eta|when|how long|fixed|resolve[d]? (by|in)|time to)\b/],
   ['approval', /\b(approv|pending|waiting|sign ?off|who needs|decision)/],
@@ -281,12 +304,16 @@ const INTENTS = [
 
 const OWNER = { impact: 'blast', eta: 'resolution', approval: 'resolution', rollback: 'resolution', tests: 'ghost', hypotheses: 'ghost', complaints: 'observability' };
 
-function addressed(text, chosen) {
-  if (/\bobserv|\bobs\b/.test(text)) return 'observability';
-  if (/\bghost/.test(text) && !/ghost test(s)? (result|run)/.test(text)) return 'ghost';
-  if (/\bblast/.test(text)) return 'blast';
-  if (/\bresolution|\bresolver\b/.test(text)) return 'resolution';
-  return chosen;
+const TAGS = [
+  ['observability', /@(observability|obs)\b/i],
+  ['ghost', /@(ghost[\s-]?test|ghost)\b/i],
+  ['blast', /@(blast[\s-]?radius|blast)\b/i],
+  ['resolution', /@(resolution|resolve)\b/i],
+];
+
+// Agents tagged with @name in the question; only they reply.
+export function taggedAgents(text) {
+  return TAGS.filter(([, pattern]) => pattern.test(text)).map(([id]) => id);
 }
 
 function reply(agentId, intent, D, step, ctx, statuses) {
@@ -326,21 +353,22 @@ function reply(agentId, intent, D, step, ctx, statuses) {
   }
 }
 
-// Answer an engineer's question; may involve a handoff to the agent who owns the topic.
+// Answer an engineer's question. Tagged agents (or the selected one) answer alone, in their own
+// voice; otherwise the agent who owns the topic, or whoever is on point, answers.
 export function answer(question, chosenAgent, D, step, ctx) {
-  const text = question.toLowerCase().trim();
+  const tags = taggedAgents(question);
+  // Tags and a leading greeting are not the question: "hey @Ghost why?" asks why.
+  const text = question.replace(/@[\w-]+(\s+(test|radius))?/gi, ' ').toLowerCase().replace(/^\W*(hi|hey|hello|yo|good (morning|afternoon|evening))\b\W*/, '').trim();
   const statuses = agentStatuses(D, step, ctx);
-  const agentId = addressed(text, chosenAgent || STEP_OWNER[step]);
   const intent = (INTENTS.find(([, pattern]) => pattern.test(text)) || ['status'])[0];
-  const owner = OWNER[intent];
-  if (owner && owner !== agentId && !chosenAgent && !/\b(observ|ghost|blast|resolution)/.test(text)) {
-    return [{ agent: owner, text: reply(owner, intent, D, step, ctx, statuses) }];
-  }
-  if (owner && owner !== agentId) {
-    return [
-      { agent: agentId, text: `${agentById[owner].name} owns that. Passing it over.` },
-      { agent: owner, text: reply(owner, intent, D, step, ctx, statuses) },
-    ];
-  }
-  return [{ agent: agentId, text: reply(agentId, intent, D, step, ctx, statuses) }];
+  const responders = tags.length ? tags : chosenAgent ? [chosenAgent] : [OWNER[intent] || STEP_OWNER[step]];
+  const replies = [];
+  responders.forEach((agentId) => {
+    let text = reply(agentId, intent, D, step, ctx, statuses);
+    // Several tagged agents should not repeat one another word for word.
+    const echo = replies.find((earlier) => earlier.text === text);
+    if (echo) text = `Agreed with ${agentById[echo.agent].name}. From my side: ${statuses[agentId].lines[0]}`;
+    replies.push({ agent: agentId, text });
+  });
+  return replies;
 }

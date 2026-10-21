@@ -708,7 +708,15 @@ export class ServiceMap {
       group.add(sprite, shadow, ring, bubble);
       group.position.copy(posts[agent]);
       this.scene.add(group);
-      return { agent, frames, mode: 'listening', sprite, material, shadow, ring, bubble, group, post: posts[agent], size: 0, active: false, text: '' };
+      return { agent, frames, mode: 'listening', sprite, material, shadow, ring, bubble, group, post: posts[agent], spot: posts[agent], size: 0, active: false, text: '', headline: '', said: 0, pending: null };
+    };
+    // Where each agent walks while it is working: right next to the problem it owns.
+    const bug = this.edges.get('gb>bankx').curve;
+    const reroute = this.edges.get('gc>bankx').curve;
+    this.agentSpots = {
+      observability: { steps: [1, 2], at: bug.getPointAt(0.32).setY(0).add(new THREE.Vector3(0, 0, -1.7)) },
+      blast: { steps: [4], at: new THREE.Vector3(this.field.centerX + this.field.radius + 1.4, 0, this.field.radius * 0.45) },
+      resolution: { steps: [5], at: reroute.getPointAt(0.5).setY(0).add(new THREE.Vector3(1.6, 0, 1.3)) },
     };
     this.mascots = Object.fromEntries(Object.keys(posts).map((agent) => [agent, make(agent)]));
     Object.values(this.mascots).forEach((mascot, index) => gsap.to(mascot, { size: 1, duration: reducedMotion ? 0 : 0.8, delay: reducedMotion ? 0 : 0.4 + index * 0.12, ease: 'back.out(2.2)' }));
@@ -723,20 +731,26 @@ export class ServiceMap {
       mascot.mode = { working: 'working', done: 'result' }[status.mode] || 'listening';
       mascot.idle = status.mode === 'idle';
       mascot.active = Boolean(status.active);
-      const text = lines?.[id] || status.lines[0];
       const el = mascot.bubble.element;
       el.classList.toggle('active', mascot.active);
       el.classList.toggle('idle', mascot.idle);
       el.dataset.mode = status.mode;
-      if (text !== mascot.text) {
-        mascot.text = text;
-        el.querySelector('b').textContent = `${{ observability: 'Observability', ghost: 'Ghost Test', blast: 'Blast Radius', resolution: 'Resolution' }[id]} · ${status.headline}`;
-        el.querySelector('span').textContent = text;
-        el.classList.remove('pop');
-        void el.offsetWidth;
-        el.classList.add('pop');
-      }
+      mascot.pending = { headline: status.headline, text: lines?.[id] || status.lines[0] };
+      // A new state (headline) shows at once; chatter within a state changes at most every 7 seconds.
+      if (status.headline !== mascot.headline) this.sayBubble(mascot);
     });
+  }
+
+  sayBubble(mascot) {
+    const { headline, text } = mascot.pending;
+    mascot.pending = null;
+    mascot.said = performance.now();
+    if (headline === mascot.headline && text === mascot.text) return;
+    const el = mascot.bubble.element;
+    if (headline !== mascot.headline) el.querySelector('b').textContent = `${{ observability: 'Observability', ghost: 'Ghost Test', blast: 'Blast Radius', resolution: 'Resolution' }[mascot.agent]} · ${headline}`;
+    if (text !== mascot.text) el.querySelector('span').textContent = text;
+    mascot.headline = headline;
+    mascot.text = text;
   }
 
   // Every 3D label the declutter pass may move, with how much it matters when space runs out.
@@ -748,7 +762,7 @@ export class ServiceMap {
       item(this.bugMarker.element, 'marker', 100, () => state().bug !== 'hidden' && !state().twin),
       item(this.lock.element, 'marker', 98, () => state().lock !== 'hidden'),
       item(this.crowdLabel.element, 'marker', 95),
-      ...Object.values(this.mascots).map((mascot) => ({ ...item(mascot.bubble.element, 'marker', 0), priorityOf: () => (mascot.active ? 99 : 94) })),
+      ...Object.values(this.mascots).map((mascot) => ({ ...item(mascot.bubble.element, 'marker', 0), upOnly: true, priorityOf: () => (mascot.active ? 99 : 94) })),
       ...this.twinLabels.map((twinLabel) => item(twinLabel.element, 'marker', 92, () => state().twin)),
       ...[...this.nodes.values()].map((node) => ({ ...item(node.el, 'node', 0, () => !node.offscreen && !state().twin), node })),
       item(this.release.element, 'badge', 40, () => state().release && !state().twin),
@@ -769,6 +783,18 @@ export class ServiceMap {
       const placed = [];
       const pad = 5;
       const frame = this.host.getBoundingClientRect();
+      // The agents themselves are obstacles: no label, their own bubbles included, may sit on top of one.
+      Object.values(this.mascots).forEach((mascot) => {
+        if (mascot.size < 0.2) return;
+        const scale = mascot.sprite.scale.y;
+        const foot = this.tmpPos.copy(mascot.sprite.position).applyMatrix4(mascot.group.matrixWorld).project(this.camera);
+        const footX = frame.left + (foot.x + 1) / 2 * frame.width;
+        const footY = frame.top + (1 - foot.y) / 2 * frame.height;
+        const head = this.tmpPos.copy(mascot.sprite.position).setY(mascot.sprite.position.y + scale * 0.92).applyMatrix4(mascot.group.matrixWorld).project(this.camera);
+        const headY = frame.top + (1 - head.y) / 2 * frame.height;
+        const half = Math.max(8, (footY - headY) * 0.36);
+        placed.push({ left: footX - half, right: footX + half, top: headY, bottom: footY });
+      });
       const outside = (box) => Math.max(0, frame.left + 4 - box.left) + Math.max(0, box.right - frame.right + 4) + Math.max(0, frame.top + 4 - box.top) + Math.max(0, box.bottom - frame.bottom + 4);
       const hits = (box) => placed.reduce((sum, other) => {
         const w = Math.min(box.right, other.right) - Math.max(box.left, other.left) + pad;
@@ -784,9 +810,9 @@ export class ServiceMap {
         const rect = entry.el.getBoundingClientRect();
         if (!rect.width || !rect.height) return;
         const base = { left: rect.left - entry.offset.x, top: rect.top - entry.offset.y, width: rect.width, height: rect.height };
-        const candidates = [entry.target, { x: 0, y: 0 }];
-        const steps = entry.kind === 'node' ? [-12, -24, -36, -48, -62, -78, -96, -116, -140, 16, 32, 48] : [-14, 14, -28, 28, -44, 44, -62, 62, -84, 84];
-        const sideways = entry.kind === 'node' ? [0, -40, 40, -80, 80] : [0, -60, 60];
+        const candidates = [entry.upOnly && entry.target.y > 0 ? { x: 0, y: 0 } : entry.target, { x: 0, y: 0 }];
+        const steps = entry.kind === 'node' ? [-12, -24, -36, -48, -62, -78, -96, -116, -140, 16, 32, 48] : entry.upOnly ? [-14, -28, -44, -62, -84, -110] : [-14, 14, -28, 28, -44, 44, -62, 62, -84, 84];
+        const sideways = entry.kind === 'node' ? [0, -40, 40, -80, 80] : entry.upOnly ? [0, -70, 70, -140, 140] : [0, -60, 60];
         sideways.forEach((x) => steps.forEach((y) => candidates.push({ x, y })));
         if (entry.kind === 'node') sideways.slice(1).forEach((x) => candidates.splice(2, 0, { x, y: 0 }));
         let best = null;
@@ -1109,11 +1135,18 @@ export class ServiceMap {
       : `<div class="map3d-card">${UNLOCK_ICON}<div><b>Approved and applied</b><span>${approval.id} · Ghost Tests rerun green</span></div></div>`;
   }
 
+  // Working agents walk to the problem they own; everyone else, and everyone once done, goes back to their post.
   placeMascots(step) {
     Object.entries(this.mascots).forEach(([id, mascot]) => {
       const ride = id === 'ghost' && step === 3;
-      if (mascot.ride && !ride) gsap.to(mascot.group.position, { x: mascot.post.x, y: 0, z: mascot.post.z, duration: reducedMotion ? 0 : 1.2, ease: 'power3.inOut' });
+      const spot = this.agentSpots[id]?.steps.includes(step) ? this.agentSpots[id].at : mascot.post;
+      if (!ride && (mascot.ride || spot !== mascot.spot)) {
+        mascot.walk?.kill();
+        mascot.walk = gsap.to(mascot.group.position, { x: spot.x, y: 0, z: spot.z, duration: reducedMotion ? 0 : 1.8, ease: 'power2.inOut' });
+      }
+      mascot.spot = spot;
       mascot.ride = ride;
+      if (ride) mascot.walk?.kill();
     });
   }
 
@@ -1400,7 +1433,9 @@ export class ServiceMap {
   }
 
   updateMascots(dt, time) {
+    const now = performance.now();
     Object.values(this.mascots).forEach((mascot) => {
+      if (mascot.pending && now - mascot.said >= 7000) this.sayBubble(mascot);
       const frames = mascot.frames[mascot.mode] || mascot.frames.listening;
       const period = mascot.mode === 'working' ? 0.42 : mascot.idle ? 1.4 : 0.8;
       const frame = frames[Math.floor(time / period) % frames.length];
@@ -1408,7 +1443,7 @@ export class ServiceMap {
       const scale = mascot.size * (mascot.active ? 3.4 : 2.6);
       if (mascot.ride) {
         const route = [this.edges.get('~router>~gb'), this.edges.get('~gb>~bankx')];
-        const loop = (time * 0.12) % 2;
+        const loop = (time * 0.06) % 2;
         const point = route[Math.floor(loop)].curve.getPointAt(loop % 1);
         this.tmpPos.copy(point).setY(0);
         mascot.group.position.lerp(this.tmpPos, Math.min(1, dt * 6));
