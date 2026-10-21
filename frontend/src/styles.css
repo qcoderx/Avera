@@ -1115,6 +1115,7 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 .map-controls button[aria-pressed="true"] { color: var(--wine); }
 
 /* Story labels inside the 3D scene */
+.map-compact-copy { display: none; }
 .map3d-hyp { grid-column: 1 / -1; display: grid; gap: 4px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); }
 .map3d-hyp > div:first-child { display: flex; align-items: center; gap: 6px; }
 .map3d-hyp b { padding: 1px 5px; border-radius: 5px; background: var(--wine); color: #fff; font-size: 9px; font-weight: 800; }
@@ -1157,7 +1158,7 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 .map3d-bubble .map3d-card::after { content: ""; position: absolute; left: 10px; top: 100%; border: 6px solid transparent; border-top-color: var(--white); border-left-color: var(--white); }
 .map3d-bubble.visible .map3d-card { animation: bubblePop .55s var(--delay) cubic-bezier(.2, .9, .3, 1.35) both, bubbleBob 3.4s calc(var(--delay) + .6s) ease-in-out infinite; }
 
-.map3d-bug .map3d-card, .map3d-lock .map3d-card, .map3d-result .map3d-card { position: relative; display: flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 10px; white-space: nowrap; }
+.map3d-bug .map3d-card, .map3d-lock .map3d-card, .map3d-result .map3d-card { position: relative; display: flex; align-items: center; gap: 7px; width: max-content; max-width: 220px; padding: 6px 10px; border-radius: 10px; white-space: normal; }
 .map3d-bug .map3d-card::after { content: ""; position: absolute; left: calc(50% - 6px); bottom: 100%; border: 6px solid transparent; border-bottom-color: var(--tail, var(--white)); }
 .map3d-lock .map3d-card::after { content: ""; position: absolute; left: 100%; top: calc(50% - 6px); border: 6px solid transparent; border-left-color: var(--tail, var(--white)); }
 .map3d-bug b, .map3d-lock b, .map3d-result strong { display: block; font-size: 10px; }
@@ -1200,9 +1201,7 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 
 .map3d-host[data-mode="compact"] .map3d-bubble,
 .map3d-host[data-mode="compact"] .map3d-hyp > div:first-child span,
-.map3d-host[data-mode="compact"] .map3d-crowd span,
-.map3d-host[data-mode="compact"] .map3d-bug span,
-.map3d-host[data-mode="compact"] .map3d-lock span { display: none; }
+.map3d-host[data-mode="compact"] .map3d-crowd .crowd-counts { display: none; }
 .map3d-host[data-mode="compact"] .map3d-card > small,
 .map3d-host[data-mode="compact"] .map3d-hyp i,
 .map3d-host[data-mode="compact"] .map3d-badge { display: none; }
@@ -1385,21 +1384,28 @@ html:not(.map-fullscreen) .map3d-hyp b,
 html:not(.map-fullscreen) .map3d-hyp span,
 html:not(.map-fullscreen) .map3d-hyp em { font-size: 7px; }
 html:not(.map-fullscreen) .map3d-hyp i { width: 62px; height: 3px; }
-html:not(.map-fullscreen) .map3d-crowd .map3d-card { min-width: 142px; padding: 6px 8px 7px 10px; border-radius: 9px; }
-html:not(.map-fullscreen) .map3d-crowd strong { font-size: 11px; }
+html:not(.map-fullscreen) .map-full-copy { display: none; }
+html:not(.map-fullscreen) .map-compact-copy { display: inline; }
+html:not(.map-fullscreen) .map3d-crowd .map3d-card { width: 152px; min-width: 0; max-width: 152px; gap: 1px; padding: 5px 7px 6px 9px; border-radius: 8px; box-shadow: 0 2px 0 var(--card-under), 0 7px 14px var(--card-shadow); }
+html:not(.map-fullscreen) .map3d-crowd .map3d-card::before { top: 7px; bottom: 7px; width: 3px; }
+html:not(.map-fullscreen) .map3d-crowd strong { overflow: hidden; font-size: 10px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
 html:not(.map-fullscreen) .map3d-crowd small,
-html:not(.map-fullscreen) .map3d-crowd span { font-size: 7.5px; }
-html:not(.map-fullscreen) .crowd-counts { gap: 7px; margin-top: 3px; }
-html:not(.map-fullscreen) .crowd-counts b { font-size: 14px; }
+html:not(.map-fullscreen) .map3d-crowd span { overflow: hidden; font-size: 7px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+html:not(.map-fullscreen) .crowd-counts { display: none; }
 html:not(.map-fullscreen) .map3d-bug .map3d-card,
 html:not(.map-fullscreen) .map3d-lock .map3d-card,
-html:not(.map-fullscreen) .map3d-result .map3d-card { gap: 5px; padding: 4px 7px; border-radius: 8px; }
+html:not(.map-fullscreen) .map3d-result .map3d-card { gap: 5px; max-width: 176px; padding: 4px 7px; border-radius: 8px; box-shadow: 0 2px 0 var(--card-under), 0 7px 14px var(--card-shadow); }
+html:not(.map-fullscreen) .map3d-bug svg,
+html:not(.map-fullscreen) .map3d-lock svg { flex: 0 0 auto; width: 13px; height: 13px; }
 html:not(.map-fullscreen) .map3d-bug b,
 html:not(.map-fullscreen) .map3d-lock b,
-html:not(.map-fullscreen) .map3d-result strong { font-size: 8.5px; }
+html:not(.map-fullscreen) .map3d-result strong { font-size: 8px; line-height: 1.1; }
 html:not(.map-fullscreen) .map3d-bug span,
 html:not(.map-fullscreen) .map3d-lock span,
-html:not(.map-fullscreen) .map3d-result span { font-size: 7px; }
+html:not(.map-fullscreen) .map3d-result span { font-size: 6.8px; line-height: 1.15; }
+html:not(.map-fullscreen) .bug-alert .map3d-card { box-shadow: 0 2px 0 #a8341f, 0 8px 16px rgba(232, 80, 61, .3); }
+html:not(.map-fullscreen) .lock-pending .map3d-card { box-shadow: 0 2px 0 var(--wine-deep), 0 8px 16px rgba(176, 19, 82, .27); }
+html:not(.map-fullscreen) .lock-approved .map3d-card { box-shadow: 0 2px 0 var(--teal-deep), 0 8px 16px rgba(30, 168, 150, .24); }
 
 /* Overview agent dock: who is on point and what they are saying */
 .agent-mini.on-point { background: color-mix(in srgb, var(--agent) 9%, var(--white)); box-shadow: inset 0 -3px 0 var(--agent); }

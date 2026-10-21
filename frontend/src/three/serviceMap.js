@@ -1109,12 +1109,16 @@ export class ServiceMap {
 
   renderCrowdLabel(customers) {
     const { affected, complained } = this.fixture.impact;
+    const silent = Math.max(0, affected - complained);
     const tone = customers.notified ? 'notified' : customers.affected >= 1 ? 'found' : customers.affected > 0 ? 'failing' : 'calm';
     this.crowdLabel.element.className = `map3d-crowd tone-${tone}`;
     const counts = customers.affected >= 1 || customers.notified
-      ? `<div class="crowd-counts"><span><b class="wine">${format.format(complained)}</b> complained</span><span><b>${format.format(affected - complained)}</b> never did</span></div>`
+      ? `<div class="crowd-counts"><span><b class="wine">${format.format(complained)}</b> complained</span><span><b>${format.format(silent)}</b> never did</span></div>`
       : '';
-    this.crowdLabel.element.innerHTML = `<div class="map3d-card"><small>${affected ? `${format.format(affected)} customers` : 'Customers'} sending to Bank X</small><strong>${customers.caption}</strong><span>${customers.detail}</span>${counts}</div>`;
+    const compactDetail = customers.affected >= 1 || customers.notified
+      ? `${format.format(complained)} reported · ${format.format(silent)} silent`
+      : customers.detail;
+    this.crowdLabel.element.innerHTML = `<div class="map3d-card"><small><span class="map-full-copy">${affected ? `${format.format(affected)} customers` : 'Customers'} sending to Bank X</span><span class="map-compact-copy">${affected ? `${format.format(affected)} customers · Bank X` : 'Customers · Bank X'}</span></small><strong>${customers.caption}</strong><span><span class="map-full-copy">${customers.detail}</span><span class="map-compact-copy">${compactDetail}</span></span>${counts}</div>`;
   }
 
   renderBug(mode) {
@@ -1122,9 +1126,9 @@ export class ServiceMap {
     el.className = `map3d-bug bug-${mode}`;
     const copy = {
       hidden: '',
-      silent: `<div class="map3d-card"><b>Acks stopped · ${this.fixture.times?.failure || '10:42'}</b><span>No alert fired. Nobody knows yet.</span></div>`,
-      alert: `<div class="map3d-card">${WARN_ICON}<div><b>ACK TIMEOUT</b><span>Gateway B → Bank X · debits with no credit</span></div></div>`,
-      bypassed: `<div class="map3d-card"><b>Bypassed</b><span>Bank X now routes via Gateway C</span></div>`,
+      silent: `<div class="map3d-card"><b>Acks stopped · ${this.fixture.times?.failure || '10:42'}</b><span><span class="map-full-copy">No alert fired. Nobody knows yet.</span><span class="map-compact-copy">Gateway B → Bank X</span></span></div>`,
+      alert: `<div class="map3d-card">${WARN_ICON}<div><b>ACK TIMEOUT</b><span><span class="map-full-copy">Gateway B → Bank X · debits with no credit</span><span class="map-compact-copy">Gateway B → Bank X · no credit</span></span></div></div>`,
+      bypassed: `<div class="map3d-card"><b>Bypassed</b><span><span class="map-full-copy">Bank X now routes via Gateway C</span><span class="map-compact-copy">Bank X via Gateway C</span></span></div>`,
     }[mode];
     el.innerHTML = copy;
   }
@@ -1134,8 +1138,8 @@ export class ServiceMap {
     el.className = `map3d-lock lock-${mode}`;
     const approval = this.fixture.approvals.find((item) => item.kind === 'Routing change') || { id: 'Reroute' };
     el.innerHTML = mode === 'hidden' ? '' : mode === 'pending'
-      ? `<div class="map3d-card">${LOCK_ICON}<div><b>Awaiting engineer approval</b><span>${approval.id} · reroute to Gateway C</span></div></div>`
-      : `<div class="map3d-card">${UNLOCK_ICON}<div><b>Approved and applied</b><span>${approval.id} · Ghost Tests rerun green</span></div></div>`;
+      ? `<div class="map3d-card">${LOCK_ICON}<div><b>Awaiting engineer approval</b><span><span class="map-full-copy">${approval.id} · reroute to Gateway C</span><span class="map-compact-copy">Reroute to Gateway C</span></span></div></div>`
+      : `<div class="map3d-card">${UNLOCK_ICON}<div><b>Approved and applied</b><span><span class="map-full-copy">${approval.id} · Ghost Tests rerun green</span><span class="map-compact-copy">Gateway C verified</span></span></div></div>`;
   }
 
   // Working agents walk to the problem they own; everyone else, and everyone once done, goes back to their post.
