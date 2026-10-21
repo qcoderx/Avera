@@ -95,7 +95,7 @@ export const fixture = {
   // One entry per demo step: how the service map tells that moment of the story.
   mapStates: [
     {
-      stage: 0, shot: 'home',
+      stage: 0,
       status: {},
       metrics: { gb: '41 ms', bankx: '33 ms', router: '24 ms' },
       tags: {}, hypotheses: {},
@@ -104,7 +104,7 @@ export const fixture = {
       insight: { agent: 'listening', label: 'Signal fusion', title: 'Every route is healthy', body: 'Synthetic customers send transfers through three gateways. Avera listens to every channel, service and complaint.', facts: [['Routes monitored', '3 gateways'], ['Partner banks', '3 healthy'], ['Open incidents', 'None']] },
     },
     {
-      stage: 0, shot: 'home',
+      stage: 0,
       status: {},
       metrics: { gb: '43 ms', bankx: '33 ms', router: '25 ms' },
       tags: {}, hypotheses: {},
@@ -113,7 +113,7 @@ export const fixture = {
       insight: { agent: 'listening', label: 'Signal fusion', title: 'A hidden failure starts', body: 'Gateway B quietly stops acknowledging Bank X transfers. App v4.2 ships at the same moment, so the obvious suspect is the wrong one.', facts: [['Recent change', 'App v4.2'], ['Alerts raised', '0'], ['Customer reports', '3 so far']] },
     },
     {
-      stage: 1, shot: 'home',
+      stage: 1,
       status: { gb: 'critical', bankx: 'critical', router: 'watch', app: 'suspect', core: 'suspect' },
       metrics: {},
       tags: {}, hypotheses: { gb: { id: 'H1', state: 'open' }, bankx: { id: 'H2', state: 'open' }, app: { id: 'H3', state: 'open' }, core: { id: 'H4', state: 'open' } },
@@ -122,7 +122,7 @@ export const fixture = {
       insight: { agent: 'working', label: 'Observability', title: 'Four suspect zones marked', body: 'Complaints, retries, USSD switching and route timeouts were fused into one incident. Every plausible cause is marked, including the app release.', facts: [['Affected route share', '92%'], ['Timeout start', '10:42'], ['Hypotheses', '4 competing']] },
     },
     {
-      stage: 2, shot: 'twin',
+      stage: 2,
       status: { gb: 'critical', bankx: 'critical', router: 'watch', app: 'suspect', core: 'suspect' },
       metrics: {},
       tags: {}, hypotheses: { gb: { id: 'H1', state: 'testing' }, bankx: { id: 'H2', state: 'testing' }, app: { id: 'H3', state: 'testing' }, core: { id: 'H4', state: 'testing' } },
@@ -131,7 +131,7 @@ export const fixture = {
       insight: { agent: 'working', label: 'Ghost Test', title: 'Testing every hypothesis in a digital twin', body: 'Synthetic transfers run through Gateway B and through the healthy Gateway C control. No customer data or money is used.', facts: [['Tests running', '15'], ['Through Gateway B', '5 of 5 failed'], ['Gateway C control', '0 of 5 failed']] },
     },
     {
-      stage: 3, shot: 'home',
+      stage: 3,
       status: { gb: 'critical', bankx: 'critical', router: 'watch', app: 'cleared', core: 'cleared' },
       metrics: {},
       tags: {}, hypotheses: { gb: { id: 'H1', state: 'proven', score: 96 }, bankx: { id: 'H2', state: 'ruled', score: 21 }, app: { id: 'H3', state: 'ruled', score: 9 }, core: { id: 'H4', state: 'ruled', score: 6 } },
@@ -140,7 +140,7 @@ export const fixture = {
       insight: { agent: 'result', label: 'Blast Radius', title: 'The cause is proven. The impact is found.', body: 'H1 survived every disproof check and the app release was ruled out. Avera matched the fingerprint to every affected customer, not only the ones who called.', facts: [['Validated cause', 'H1 · 96%'], ['Affected customers', '1,109'], ['Never complained', '1,096']] },
     },
     {
-      stage: 4, shot: 'reroute',
+      stage: 4,
       status: { gb: 'critical', bankx: 'critical', router: 'watch', gc: 'proposed' },
       metrics: {},
       tags: { gc: 'Reroute target' }, hypotheses: { gb: { id: 'H1', state: 'proven', score: 96 } },
@@ -149,7 +149,7 @@ export const fixture = {
       insight: { agent: 'listening', label: 'Resolution', title: 'The fix waits for a human', body: 'Bank X traffic can move to Gateway C. The digital twin shows 96.7% success. Nothing changes in production until an engineer approves.', facts: [['Simulated success', '96.7%'], ['Containment ETA', '10 minutes'], ['Rollback trigger', 'Gateway C errors > 2%']] },
     },
     {
-      stage: 5, shot: 'home',
+      stage: 5,
       status: { gb: 'patching' },
       metrics: { gb: 'Patch in review', bankx: '34 ms', gc: '99.8%' },
       tags: { gb: 'Patch in review', gc: 'Carrying Bank X' }, hypotheses: {},

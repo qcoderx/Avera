@@ -17,7 +17,6 @@ const state = {
   theme: 'light',
   memoryQuery: '',
   selectedNode: null,
-  cinematic: true,
 };
 
 const has3d = webglAvailable();
@@ -201,7 +200,6 @@ function mountMap(intro) {
     });
   }
   serviceMap.setTheme(state.theme);
-  serviceMap.cinematic = state.cinematic;
   serviceMap.setStep(state.demoStep);
   serviceMap.mount(slot, { mode: slot.dataset.mapSlot, intro });
   if (slot.dataset.mapSlot === 'full') updateMapInsets();
@@ -323,7 +321,7 @@ function mapView() {
       <div class="stage-bottom">
         <button class="stage-play" data-action="play" aria-label="${state.playing ? 'Pause story' : 'Play story'}">${icon(state.playing ? 'pause' : 'play', 18)}</button>
         <ol class="stage-timeline" style="--progress:${state.demoStep / last}">${fixture.demoSteps.map((item, index) => `<li><button class="${index < state.demoStep ? 'done' : ''} ${index === state.demoStep ? 'current' : ''}" data-step="${index}"><time>${item.time}</time><span>${item.label}</span></button></li>`).join('')}</ol>
-        ${has3d ? `<div class="map-controls"><button data-map-action="cinematic" aria-pressed="${state.cinematic}">${icon('orbit', 16)} Cinematic ${state.cinematic ? 'on' : 'off'}</button><button data-map-action="focus">${icon('focus', 16)} Suspect</button><button data-map-action="reset">${icon('reset', 16)} Reset</button></div>` : ''}
+        ${has3d ? `<div class="map-controls"><button data-map-action="focus">${icon('focus', 16)} Zoom to suspect</button><button data-map-action="reset">${icon('reset', 16)} Reset view</button></div>` : ''}
         ${mapLegend()}
       </div>
     </section>`;
@@ -587,7 +585,6 @@ function bindEvents() {
   document.querySelectorAll('[data-action="play"]').forEach((button) => button.addEventListener('click', () => togglePlay(Boolean(button.closest('.demo-panel')))));
   document.querySelector('[data-action="next"]')?.addEventListener('click', () => setStep(state.demoStep + 1));
   document.querySelector('[data-action="reset"]')?.addEventListener('click', () => { state.playing = false; clearInterval(playTimer); setStep(0); });
-  document.querySelector('[data-map-action="cinematic"]')?.addEventListener('click', () => { state.cinematic = !state.cinematic; serviceMap?.setCinematic(state.cinematic); render(); });
   document.querySelector('[data-action="theme"]')?.addEventListener('click', () => { state.theme = state.theme === 'light' ? 'dark' : 'light'; render(); });
   document.querySelector('[data-map-action="focus"]')?.addEventListener('click', () => serviceMap?.focusSuspect());
   document.querySelectorAll('[data-map-action="reset"]').forEach((button) => button.addEventListener('click', () => serviceMap?.resetView()));

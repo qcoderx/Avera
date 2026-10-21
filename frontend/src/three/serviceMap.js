@@ -30,6 +30,9 @@ const COLORS = {
 const LANE_SHAPES = { channels: 'tile', services: 'tower', routes: 'hex', partners: 'vault' };
 const SHAPE_HEIGHT = { tile: 0.5, tower: 0.92, hex: 0.72, vault: 1 };
 const S = 1.22;
+const VIEW_HEIGHT = 30;
+const CAMERA_DISTANCE = 90;
+const VIEW_DIRECTION = new THREE.Vector3(0, 0.82, 0.57).normalize();
 const TWIN_LIFT = 8;
 const PARTICLE_COUNT = 150;
 const FIELD = { cols: 26, rows: 43, gap: 0.27, centerX: -25 };
@@ -178,13 +181,10 @@ export class ServiceMap {
     this.theme = 'light';
     this.step = -1;
     this.mode = 'full';
-    this.cinematic = true;
     this.selected = null;
     this.hovered = null;
     this.running = false;
-    this.lastInteraction = -Infinity;
-    this.swayAmount = 0;
-    this.swayClock = 0;
+    this.userMoved = false;
     this.focusTween = null;
     this.frameTimes = [];
     this.insets = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -213,19 +213,18 @@ export class ServiceMap {
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     this.scene.environmentIntensity = 0.55;
 
-    this.camera = new THREE.PerspectiveCamera(32, 1.6, 0.1, 400);
-    this.camera.position.set(0, 30, 34);
+    this.camera = new THREE.OrthographicCamera(-24, 24, 15, -15, 0.1, 400);
+    this.camera.position.copy(VIEW_DIRECTION).multiplyScalar(CAMERA_DISTANCE);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.07;
     this.controls.enablePan = false;
     this.controls.minPolarAngle = 0.3;
     this.controls.maxPolarAngle = 1.22;
-    this.controls.minDistance = 10;
-    this.controls.maxDistance = 140;
+    this.controls.minZoom = 0.2;
+    this.controls.maxZoom = 6;
     this.controls.rotateSpeed = 0.6;
-    this.controls.addEventListener('start', () => { this.lastInteraction = Infinity; this.focusTween?.kill(); });
-    this.controls.addEventListener('end', () => { this.lastInteraction = performance.now(); });
+    this.controls.addEventListener('start', () => { this.userMoved = true; this.focusTween?.kill(); });
 
     this.clock = new THREE.Clock();
     this.raycaster = new THREE.Raycaster();
@@ -378,8 +377,8 @@ export class ServiceMap {
       return ring;
     });
 
-    this.crowdLabel = label('map3d-crowd', '', [0.5, 0]);
-    this.crowdLabel.position.set(centerX, 0.2, half.z + 0.9);
+    this.crowdLabel = label('map3d-crowd', '', [0.5, 1]);
+    this.crowdLabel.position.set(centerX, 0.2, -half.z - 0.5);
     this.scene.add(this.crowdLabel);
 
     const quotes = this.fixture.rawComplaints;
@@ -548,10 +547,10 @@ export class ServiceMap {
     const deckLabel = label('map3d-twin-title', `<div class="map3d-card"><b>Digital twin</b><span>Synthetic transfers only · no customer money</span></div>`, [0.5, 1]);
     deckLabel.center.set(1, 0.5);
     deckLabel.position.copy(this.twinNodes.get('router').home).add(new THREE.Vector3(-2.2, 1.2, 0));
-    const fail = label('map3d-result fail', `<div class="map3d-card"><i>✕</i><div><strong>Through Gateway B</strong><span>${tests['T-01'].runs} reproduced · ack timeout</span></div></div>`, [0.5, 1]);
-    fail.position.copy(this.edges.get('~gb>~bankx').curve.getPointAt(0.5)).add(new THREE.Vector3(0, 0.5, 0));
-    const pass = label('map3d-result pass', `<div class="map3d-card"><i>✓</i><div><strong>Gateway C control</strong><span>${tests['T-02'].runs} reproduced · healthy</span></div></div>`, [0, 0.5]);
-    pass.position.copy(this.twinNodes.get('bankz').home).add(new THREE.Vector3(1.7, 0.6, 0));
+    const fail = label('map3d-result fail', `<div class="map3d-card"><i>✕</i><div><strong>Through Gateway B</strong><span>${tests['T-01'].runs} reproduced · ack timeout</span></div></div>`, [1, 0.5]);
+    fail.position.copy(this.twinNodes.get('gb').home).add(new THREE.Vector3(-1.8, 0.6, 0));
+    const pass = label('map3d-result pass', `<div class="map3d-card"><i>✓</i><div><strong>Gateway C control</strong><span>${tests['T-02'].runs} reproduced · healthy</span></div></div>`, [1, 0.5]);
+    pass.position.copy(this.twinNodes.get('gc').home).add(new THREE.Vector3(-1.8, 0.6, 0));
     this.twinLabels = [deckLabel, fail, pass];
     this.twinLabels.forEach((item) => this.twin.add(item));
   }
@@ -598,8 +597,8 @@ export class ServiceMap {
     this.scene.add(this.blast);
 
     const reroute = this.edges.get('gc>bankx');
-    this.lock = label('map3d-lock', '', [0, 0.5]);
-    this.lock.position.copy(reroute.curve.getPointAt(0.66)).add(new THREE.Vector3(0.7, 0, 0));
+    this.lock = label('map3d-lock', '', [1, 0.5]);
+    this.lock.position.copy(reroute.curve.getPointAt(0.5)).add(new THREE.Vector3(-0.6, 0, 0));
     this.scene.add(this.lock);
 
     this.release = label('map3d-badge', `<div class="map3d-card"><b>App v4.2</b> released at 10:42</div>`, [0.5, 0]);
@@ -759,7 +758,6 @@ export class ServiceMap {
     } else if (!shouldRun) this.sleep();
   }
 
-  // Pull the camera back until every point sits inside the frame.
   setInsets(insets) {
     const next = { top: 0, right: 0, bottom: 0, left: 0, ...insets };
     if (Object.keys(next).every((key) => Math.abs(next[key] - this.insets[key]) < 2)) return;
@@ -778,6 +776,13 @@ export class ServiceMap {
     this.camera.setViewOffset(this.width, this.height, -(left - right) / 2, -(top - bottom) / 2, this.width, this.height);
   }
 
+  updateFrustum() {
+    const aspect = this.width / this.height;
+    Object.assign(this.camera, { left: (-VIEW_HEIGHT * aspect) / 2, right: (VIEW_HEIGHT * aspect) / 2, top: VIEW_HEIGHT / 2, bottom: -VIEW_HEIGHT / 2 });
+    this.camera.updateProjectionMatrix();
+  }
+
+  // Find the largest zoom at which every point sits inside the free area.
   fit(points, direction, target, margin) {
     const { top, right, bottom, left } = this.mode === 'full' ? this.insets : { top: 0, right: 0, bottom: 0, left: 0 };
     const frame = {
@@ -787,19 +792,26 @@ export class ServiceMap {
       ry: ((this.height - top - bottom) / this.height) * margin,
     };
     const probe = this.camera.clone();
+    probe.position.copy(target).addScaledVector(direction, CAMERA_DISTANCE);
+    probe.lookAt(target);
+    probe.updateMatrixWorld();
     const corner = new THREE.Vector3();
-    let distance = 8;
-    for (; distance < 160; distance += 0.5) {
-      probe.position.copy(target).addScaledVector(direction, distance);
-      probe.lookAt(target);
-      probe.updateMatrixWorld();
-      const fits = points.every((point) => {
+    const fits = (zoom) => {
+      probe.zoom = zoom;
+      probe.updateProjectionMatrix();
+      return points.every((point) => {
         corner.copy(point).project(probe);
         return Math.abs(corner.x - frame.cx) <= frame.rx && Math.abs(corner.y - frame.cy) <= frame.ry;
       });
-      if (fits) break;
+    };
+    let low = 0.05;
+    let high = 12;
+    for (let i = 0; i < 30; i += 1) {
+      const mid = (low + high) / 2;
+      if (fits(mid)) low = mid;
+      else high = mid;
     }
-    return { position: probe.position.clone(), target };
+    return { position: probe.position.clone(), target: target.clone(), zoom: low };
   }
 
   labelPoints(ids, lift = 3.2) {
@@ -809,28 +821,26 @@ export class ServiceMap {
     });
   }
 
-  shot(name = 'home') {
+  // The one resting view: square to the board, looking straight down the lanes.
+  homeView() {
     const compact = this.mode === 'compact';
     const { minX, maxX, minZ, maxZ } = this.bounds;
-    if (name === 'twin' && !compact) {
-      const twin = [...this.twinNodes.values()].flatMap((node) => [node.home.clone().setY(TWIN_LIFT + node.height + 2.6), node.home.clone().setY(0)]);
-      const title = this.twinNodes.get('router').home.clone().add(new THREE.Vector3(-8, 1, 0));
-      const pass = this.twinNodes.get('bankz').home.clone().add(new THREE.Vector3(7, TWIN_LIFT, 0));
-      return this.fit([...twin, title, pass], new THREE.Vector3(-0.08, 0.5, 0.86).normalize(), new THREE.Vector3(8.5, 4.2, 2.5), 0.94);
-    }
-    if (name === 'reroute' && !compact) {
-      const points = this.labelPoints(['router', 'gb', 'gc', 'bankx', 'bankz', 'ga', 'banky']);
-      return this.fit(points, new THREE.Vector3(-0.14, 0.7, 0.7).normalize(), new THREE.Vector3(9, 0.8, 1.2), 0.9);
-    }
     const corners = [minX, maxX].flatMap((x) => [minZ, maxZ].flatMap((z) => [new THREE.Vector3(x, 0, z), new THREE.Vector3(x, -0.9, z)]));
-    const labels = compact ? [] : [...this.labelPoints([...this.nodes.keys()]), new THREE.Vector3(this.field.centerX, 1.2, -this.field.half.z)];
-    const direction = (compact ? new THREE.Vector3(-0.06, 0.6, 0.8) : new THREE.Vector3(-0.04, 0.7, 0.72)).normalize();
-    return this.fit([...corners, ...labels], direction, new THREE.Vector3(this.boardCenter.x, 0, compact ? 0.6 : 0.4), compact ? 0.98 : 0.97);
+    const labels = compact ? [] : [
+      ...this.labelPoints([...this.nodes.keys()]),
+      ...[...this.twinNodes.values()].map((node) => node.home.clone().setY(TWIN_LIFT + node.height + 2)),
+    ];
+    return this.fit([...corners, ...labels], VIEW_DIRECTION, new THREE.Vector3(this.boardCenter.x, 0, 0), compact ? 0.98 : 0.97);
   }
 
-  currentShot() {
-    if (!this.cinematic || this.mode !== 'full') return this.shot('home');
-    return this.shot(this.state?.shot);
+  setView(view) {
+    this.focusTween?.kill();
+    this.camera.position.copy(view.position);
+    this.controls.target.copy(view.target);
+    this.camera.zoom = view.zoom;
+    this.camera.updateProjectionMatrix();
+    this.camera.lookAt(view.target);
+    this.controls.update();
   }
 
   resize() {
@@ -842,54 +852,38 @@ export class ServiceMap {
     this.host.classList.toggle('tight', rect.width < 760);
     this.renderer.setSize(rect.width, rect.height, false);
     this.labels.setSize(rect.width, rect.height);
-    this.camera.aspect = rect.width / rect.height;
-    this.camera.updateProjectionMatrix();
+    this.updateFrustum();
     this.applyViewOffset();
-    if (changed && !this.selected && !this.introPlaying) {
-      this.focusTween?.kill();
-      const view = this.currentShot();
-      this.camera.position.copy(view.position);
-      this.controls.target.copy(view.target);
-    }
+    if (changed && !this.userMoved) this.setView(this.homeView());
   }
 
-  fly(view, duration = 1.8) {
+  // Camera moves only ever start from the viewer: the Suspect and Reset buttons.
+  fly(view, duration = 1.2) {
     this.focusTween?.kill();
     const time = reducedMotion ? 0.01 : duration;
-    this.focusTween = gsap.timeline()
+    this.focusTween = gsap.timeline({ onUpdate: () => this.camera.updateProjectionMatrix() })
       .to(this.camera.position, { x: view.position.x, y: view.position.y, z: view.position.z, duration: time, ease: 'power3.inOut' }, 0)
-      .to(this.controls.target, { x: view.target.x, y: view.target.y, z: view.target.z, duration: time, ease: 'power3.inOut' }, 0);
-    this.lastInteraction = performance.now();
+      .to(this.controls.target, { x: view.target.x, y: view.target.y, z: view.target.z, duration: time, ease: 'power3.inOut' }, 0)
+      .to(this.camera, { zoom: view.zoom, duration: time, ease: 'power3.inOut' }, 0);
   }
 
   playIntro() {
-    const home = this.currentShot();
-    this.introPlaying = true;
     this.clearSelection();
-    if (reducedMotion) {
-      this.camera.position.copy(home.position);
-      this.controls.target.copy(home.target);
-      this.introPlaying = false;
-      return;
-    }
-    const from = home.position.clone().sub(home.target).applyAxisAngle(new THREE.Vector3(0, 1, 0), -0.5).multiplyScalar(1.3).add(home.target).add(new THREE.Vector3(0, 8, 0));
-    this.camera.position.copy(from);
-    this.controls.target.copy(home.target);
-    gsap.to(this.camera.position, { x: home.position.x, y: home.position.y, z: home.position.z, duration: 2.2, ease: 'expo.out', onComplete: () => { this.introPlaying = false; } });
-    gsap.fromTo(this.board.scale, { x: 0.9, y: 0.9, z: 0.9 }, { x: 1, y: 1, z: 1, duration: 1.4, ease: 'expo.out' });
+    this.userMoved = false;
+    this.setView(this.homeView());
+    if (reducedMotion) return;
     [...this.nodes.values()].sort((a, b) => a.home.x - b.home.x || a.home.z - b.home.z).forEach((node, index) => {
-      node.introY = 6;
-      node.group.scale.setScalar(0.4);
-      gsap.to(node, { introY: 0, duration: 1.15, delay: 0.25 + index * 0.06, ease: 'bounce.out' });
-      gsap.to(node.group.scale, { x: 1, y: 1, z: 1, duration: 0.9, delay: 0.25 + index * 0.06, ease: 'back.out(2)' });
+      node.introY = 4;
+      node.group.scale.setScalar(0.5);
+      gsap.to(node, { introY: 0, duration: 0.8, delay: 0.1 + index * 0.04, ease: 'power3.out' });
+      gsap.to(node.group.scale, { x: 1, y: 1, z: 1, duration: 0.7, delay: 0.1 + index * 0.04, ease: 'back.out(1.6)' });
     });
-    this.people.forEach((person) => { person.lift = -0.6; });
     this.edges.forEach((edge) => {
       if (edge.kind !== undefined) return;
       edge.draw = 0;
-      gsap.to(edge, { draw: 1, duration: 1.1, delay: 0.8 + (edge.curve.v0.x - this.bounds.minX) * 0.03, ease: 'power2.inOut' });
+      gsap.to(edge, { draw: 1, duration: 0.9, delay: 0.5 + (edge.curve.v0.x - this.bounds.minX) * 0.02, ease: 'power2.inOut' });
     });
-    this.particleState.forEach((p) => { p.alive = false; p.wait = 1.6 + Math.random() * 2.4; });
+    this.particleState.forEach((p) => { p.alive = false; p.wait = 1.2 + Math.random() * 2; });
   }
 
   setTheme(theme) {
@@ -907,14 +901,8 @@ export class ServiceMap {
     this.edgeMat.color.set(t.edge);
   }
 
-  setCinematic(on) {
-    this.cinematic = on;
-    if (!this.selected && !this.introPlaying) this.fly(this.currentShot(), 1.4);
-  }
-
   setStep(step) {
     if (step === this.step) return;
-    const previousShot = this.state?.shot;
     const state = this.fixture.mapStates[step];
     this.step = step;
     this.state = state;
@@ -963,9 +951,6 @@ export class ServiceMap {
     this.renderLock(state.lock);
     this.release.element.classList.toggle('visible', state.release);
     this.placeMascots(step);
-    if (previousShot !== state.shot || this.cinematic) {
-      if (!this.selected && !this.introPlaying && this.host.isConnected && this.width) this.fly(this.currentShot());
-    }
   }
 
   renderHypothesis(node, hypothesis) {
@@ -1046,29 +1031,29 @@ export class ServiceMap {
     this.nodes.forEach((node) => node.el.classList.remove('selected'));
   }
 
+  // Selecting a component highlights it and opens its details; the camera stays put.
   select(id) {
     this.clearSelection();
     this.selected = id;
     this.nodes.forEach((node) => node.el.classList.toggle('selected', node.id === id));
-    if (!id) {
-      this.fly(this.currentShot(), 1.3);
-      return;
-    }
-    const target = this.nodes.get(id).home.clone().setY(0.8);
-    const offset = this.camera.position.clone().sub(this.controls.target).setLength(17);
-    offset.y = Math.max(offset.y, 9);
-    this.fly({ position: target.clone().add(offset), target }, 1.3);
   }
 
   focusSuspect() {
     const suspect = [...this.nodes.values()].find((node) => node.status === 'critical');
-    this.select(suspect ? suspect.id : null);
+    if (!suspect) return;
+    this.select(suspect.id);
     this.onSelect?.(this.selected);
+    const home = this.homeView();
+    const target = suspect.home.clone();
+    this.userMoved = true;
+    this.fly({ position: target.clone().addScaledVector(VIEW_DIRECTION, CAMERA_DISTANCE), target, zoom: home.zoom * 2 });
   }
 
   resetView() {
     this.select(null);
     this.onSelect?.(null);
+    this.userMoved = false;
+    this.fly(this.homeView());
   }
 
   activeFlows() {
@@ -1108,20 +1093,9 @@ export class ServiceMap {
     this.adaptQuality(delta);
     const dt = Math.min(delta, 0.05);
     const time = this.clock.elapsedTime;
-    this.swayClock += dt;
 
-    if (this.introPlaying || this.focusTween?.isActive()) {
-      this.camera.lookAt(this.controls.target);
-    } else {
-      const idle = performance.now() - this.lastInteraction > 4500 && !this.selected && !reducedMotion;
-      this.swayAmount += ((idle ? 1 : 0) - this.swayAmount) * Math.min(1, dt * 0.8);
-      if (this.swayAmount > 0.001) {
-        const offset = this.camera.position.clone().sub(this.controls.target);
-        offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.cos(this.swayClock * 0.18) * 0.016 * dt * this.swayAmount);
-        this.camera.position.copy(this.controls.target).add(offset);
-      }
-      this.controls.update();
-    }
+    if (this.focusTween?.isActive()) this.camera.lookAt(this.controls.target);
+    else this.controls.update();
 
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const hits = this.raycaster.intersectObjects([...this.nodes.values()].flatMap((node) => node.pickables), false);
@@ -1155,7 +1129,7 @@ export class ServiceMap {
       node.hover += ((node.id === this.hovered || node.id === this.selected ? 1 : 0) - node.hover) * Math.min(1, dt * 10);
       const critical = node.status === 'critical';
       node.group.position.y = node.introY;
-      node.lift.position.y = node.raise + node.hover * 0.3 + (critical ? Math.sin(time * 2.2 + node.home.x) * 0.07 : 0);
+      node.lift.position.y = node.raise + node.hover * 0.3;
       node.capMat.color.copy(node.color);
       node.capMat.emissive.copy(node.color);
       node.capMat.emissiveIntensity = critical ? 0.45 + Math.sin(time * 4.2) * 0.25 : node.status === 'proposed' ? 0.4 + Math.sin(time * 2.4) * 0.15 : 0.1;
