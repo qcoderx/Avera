@@ -724,9 +724,9 @@ export class ServiceMap {
     canvas.addEventListener('pointerup', (event) => {
       if (this.mode !== 'full' || !down || Math.hypot(event.clientX - down[0], event.clientY - down[1]) > 6) return;
       down = null;
-      const id = this.hovered;
-      this.select(id && id !== this.selected ? id : null);
-      this.onSelect?.(this.selected);
+      const id = this.hovered && this.hovered !== this.selected ? this.hovered : null;
+      if (id) this.zoomTo(id);
+      else this.resetView();
     });
   }
 
@@ -1038,15 +1038,20 @@ export class ServiceMap {
     this.nodes.forEach((node) => node.el.classList.toggle('selected', node.id === id));
   }
 
+  // Zoom in on a component the viewer clicked, keeping the same straight angle.
+  zoomTo(id) {
+    const node = this.nodes.get(id);
+    if (!node) return;
+    this.select(id);
+    this.onSelect?.(id);
+    const target = node.home.clone();
+    this.userMoved = true;
+    this.fly({ position: target.clone().addScaledVector(VIEW_DIRECTION, CAMERA_DISTANCE), target, zoom: this.homeView().zoom * 2.2 });
+  }
+
   focusSuspect() {
     const suspect = [...this.nodes.values()].find((node) => node.status === 'critical');
-    if (!suspect) return;
-    this.select(suspect.id);
-    this.onSelect?.(this.selected);
-    const home = this.homeView();
-    const target = suspect.home.clone();
-    this.userMoved = true;
-    this.fly({ position: target.clone().addScaledVector(VIEW_DIRECTION, CAMERA_DISTANCE), target, zoom: home.zoom * 2 });
+    if (suspect) this.zoomTo(suspect.id);
   }
 
   resetView() {
