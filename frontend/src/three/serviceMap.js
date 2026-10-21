@@ -963,8 +963,13 @@ export class ServiceMap {
     this.edgeMat.color.set(t.edge);
   }
 
-  setStep(step) {
-    if (step === this.step) return;
+  // Live data replaces the recorded fixture's numbers, hypotheses and approvals.
+  setData(data) {
+    this.fixture = { ...this.fixture, hypotheses: data.hypotheses, impact: data.impact, approvals: data.approvals, mapStates: data.mapStates, incident: data.incident };
+  }
+
+  setStep(step, force = false) {
+    if (step === this.step && !force) return;
     const state = this.fixture.mapStates[step];
     this.step = step;
     this.state = state;
@@ -1021,12 +1026,12 @@ export class ServiceMap {
       el.hidden = true;
       return;
     }
-    const data = this.fixture.hypotheses.find((item) => item.id === hypothesis.id);
+    const data = this.fixture.hypotheses.find((item) => item.id === hypothesis.id) || {};
     const score = hypothesis.score ?? (hypothesis.state === 'testing' ? 55 : 0);
     const value = hypothesis.state === 'open' ? 'open' : hypothesis.state === 'testing' ? 'testing' : `${hypothesis.score}%`;
     el.hidden = false;
     el.className = `map3d-hyp hyp-${hypothesis.state}`;
-    el.innerHTML = `<div><b>${hypothesis.id}</b><span>${data.short}</span></div><div><i><u style="width:${score}%"></u><s></s></i><em>${hypothesis.state === 'proven' ? '✓ ' : hypothesis.state === 'ruled' ? '✕ ' : ''}${value}</em></div>`;
+    el.innerHTML = `<div><b>${hypothesis.id}</b><span>${hypothesis.short || data.short || ''}</span></div><div><i><u style="width:${score}%"></u><s></s></i><em>${hypothesis.state === 'proven' ? '✓ ' : hypothesis.state === 'ruled' ? '✕ ' : ''}${value}</em></div>`;
   }
 
   renderCrowdLabel(customers) {
@@ -1036,7 +1041,7 @@ export class ServiceMap {
     const counts = customers.affected >= 1 || customers.notified
       ? `<div class="crowd-counts"><span><b class="wine">${format.format(complained)}</b> complained</span><span><b>${format.format(affected - complained)}</b> never did</span></div>`
       : '';
-    this.crowdLabel.element.innerHTML = `<div class="map3d-card"><small>${format.format(affected)} customers sending to Bank X</small><strong>${customers.caption}</strong><span>${customers.detail}</span>${counts}</div>`;
+    this.crowdLabel.element.innerHTML = `<div class="map3d-card"><small>${affected ? `${format.format(affected)} customers` : 'Customers'} sending to Bank X</small><strong>${customers.caption}</strong><span>${customers.detail}</span>${counts}</div>`;
   }
 
   renderBug(mode) {
@@ -1054,7 +1059,7 @@ export class ServiceMap {
   renderLock(mode) {
     const el = this.lock.element;
     el.className = `map3d-lock lock-${mode}`;
-    const approval = this.fixture.approvals.find((item) => item.kind === 'Routing change');
+    const approval = this.fixture.approvals.find((item) => item.kind === 'Routing change') || { id: 'Reroute' };
     el.innerHTML = mode === 'hidden' ? '' : mode === 'pending'
       ? `<div class="map3d-card">${LOCK_ICON}<div><b>Awaiting engineer approval</b><span>${approval.id} · reroute to Gateway C</span></div></div>`
       : `<div class="map3d-card">${UNLOCK_ICON}<div><b>Approved and applied</b><span>${approval.id} · Ghost Tests rerun green</span></div></div>`;
