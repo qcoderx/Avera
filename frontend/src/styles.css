@@ -958,14 +958,14 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 .map3d-labels { position: absolute; inset: 0; pointer-events: none; }
 .map3d-labels > * { pointer-events: none; }
 .map3d-card { transition: transform .28s cubic-bezier(.2, .9, .3, 1.3), opacity .3s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease; transform-origin: 50% 100%; }
-.map3d-label .map3d-card { position: relative; display: grid; grid-template-columns: 8px auto; align-items: center; gap: 1px 7px; margin-bottom: 16px; padding: 6px 10px 7px 9px; border: 1px solid color-mix(in srgb, var(--mocha) 18%, var(--line)); border-radius: 11px; background: var(--glass); backdrop-filter: blur(8px); box-shadow: 0 3px 0 var(--card-under), 0 9px 18px var(--card-shadow); white-space: nowrap; }
+.map3d-label .map3d-card { position: relative; display: grid; grid-template-columns: 7px auto; align-items: center; gap: 1px 6px; margin-bottom: 12px; padding: 5px 8px 6px 7px; border: 1px solid color-mix(in srgb, var(--mocha) 18%, var(--line)); border-radius: 9px; background: var(--glass); backdrop-filter: blur(8px); box-shadow: 0 2px 0 var(--card-under), 0 7px 14px var(--card-shadow); white-space: nowrap; }
 .map3d-label .map3d-card::after { content: ""; position: absolute; left: calc(50% - 1px - var(--shift, 0px)); top: calc(100% + 1px); width: 2px; height: calc(15px + var(--lift, 0px)); border-radius: 2px; background: linear-gradient(var(--line), transparent); }
 .status-critical .map3d-card::after { background: linear-gradient(var(--coral), transparent); }
 .status-suspect .map3d-card::after, .status-proposed .map3d-card::after { background: linear-gradient(var(--wine), transparent); }
-.map3d-dot { grid-row: span 2; width: 8px; height: 8px; border-radius: 50%; background: var(--teal); }
-.map3d-card strong { font-size: 11px; font-weight: 740; letter-spacing: -.01em; color: var(--ink); }
-.map3d-card small { color: var(--muted); font-size: 9px; }
-.map3d-card > em { grid-column: 1 / -1; justify-self: start; margin-top: 4px; padding: 2px 7px; border-radius: 6px; background: var(--wine); color: #fff; font-size: 9px; font-style: normal; font-weight: 760; }
+.map3d-dot { grid-row: span 2; width: 7px; height: 7px; border-radius: 50%; background: var(--teal); }
+.map3d-card strong { font-size: 10px; font-weight: 740; letter-spacing: -.01em; color: var(--ink); }
+.map3d-card small { color: var(--muted); font-size: 8px; }
+.map3d-card > em { grid-column: 1 / -1; justify-self: start; margin-top: 3px; padding: 2px 6px; border-radius: 5px; background: var(--wine); color: #fff; font-size: 8px; font-style: normal; font-weight: 760; }
 .map3d-card > em[hidden], .map3d-hyp[hidden] { display: none; }
 .map3d-label.hover .map3d-card, .map3d-label.selected .map3d-card { transform: translateY(-5px) scale(1.06); box-shadow: 0 5px 0 var(--card-under), 0 16px 26px var(--card-shadow); }
 .map3d-label.selected .map3d-card { border-color: var(--wine); box-shadow: 0 0 0 3px rgba(176, 19, 82, .18), 0 5px 0 var(--card-under), 0 16px 26px var(--card-shadow); }
@@ -987,7 +987,7 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 .map3d-host.tight .map3d-card strong { font-size: 9px; }
 .map3d-host.tight .map3d-card em { margin-top: 2px; font-size: 8px; }
 .map3d-host.tight .map3d-label .map3d-card::after { height: calc(9px + var(--lift, 0px)); }
-.map3d-lane { padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--glass); color: var(--muted); font-size: 9px; font-weight: 760; letter-spacing: .09em; text-transform: uppercase; white-space: nowrap; }
+.map3d-lane { padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--glass); color: var(--muted); font-size: 8px; font-weight: 760; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
 .map3d-badge .map3d-card { margin-top: 6px; padding: 5px 10px; border-radius: 999px; background: var(--wine); color: #fff; font-size: 9px; font-weight: 760; white-space: nowrap; box-shadow: 0 3px 0 var(--wine-deep), 0 8px 18px rgba(176, 19, 82, .3); transform: translateY(8px) scale(.8); }
 .map3d-badge.visible .map3d-card { transform: none; }
 
@@ -1134,34 +1134,34 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 .hyp-ruled b, .hyp-ruled u { background: #b9aea7; }
 .hyp-ruled em { color: var(--muted); }
 
-.map3d-crowd .map3d-card { position: relative; display: grid; gap: 3px; min-width: 210px; margin-bottom: 6px; padding: 11px 14px 12px 16px; border: 1px solid color-mix(in srgb, var(--mocha) 16%, var(--line)); border-radius: 15px; background: var(--glass); backdrop-filter: blur(10px); box-shadow: 0 4px 0 var(--card-under), 0 14px 28px var(--card-shadow); }
+.map3d-crowd .map3d-card { position: relative; display: grid; gap: 2px; min-width: 182px; margin-bottom: 5px; padding: 8px 11px 9px 13px; border: 1px solid color-mix(in srgb, var(--mocha) 16%, var(--line)); border-radius: 12px; background: var(--glass); backdrop-filter: blur(10px); box-shadow: 0 3px 0 var(--card-under), 0 10px 22px var(--card-shadow); }
 .map3d-crowd .map3d-card::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 4px; border-radius: 0 4px 4px 0; background: var(--teal); }
-.map3d-crowd small { color: var(--muted); font-size: 9px; font-weight: 760; letter-spacing: .05em; text-transform: uppercase; }
-.map3d-crowd strong { color: var(--ink); font-size: 16px; letter-spacing: -.02em; }
-.map3d-crowd span { color: var(--muted); font-size: 10.5px; }
+.map3d-crowd small { color: var(--muted); font-size: 8px; font-weight: 760; letter-spacing: .04em; text-transform: uppercase; }
+.map3d-crowd strong { color: var(--ink); font-size: 14px; letter-spacing: -.02em; }
+.map3d-crowd span { color: var(--muted); font-size: 9px; }
 .map3d-crowd.tone-failing .map3d-card::before { background: var(--coral); }
 .map3d-crowd.tone-found .map3d-card { border-color: transparent; background: var(--panel-grad); box-shadow: 0 4px 0 #2c1a1d, 0 18px 34px rgba(82, 30, 40, .32); }
 .map3d-crowd.tone-found .map3d-card::before { background: var(--wine-bright); }
 .map3d-crowd.tone-found small, .map3d-crowd.tone-found span { color: rgba(255, 255, 255, .72); }
 .map3d-crowd.tone-found strong { color: #fff; }
-.crowd-counts { display: flex; gap: 14px; margin-top: 6px; }
-.crowd-counts span { display: grid; gap: 1px; font-size: 9.5px; }
-.crowd-counts b { color: var(--coral); font-size: 22px; line-height: 1; letter-spacing: -.04em; }
+.crowd-counts { display: flex; gap: 10px; margin-top: 4px; }
+.crowd-counts span { display: grid; gap: 1px; font-size: 8.5px; }
+.crowd-counts b { color: var(--coral); font-size: 18px; line-height: 1; letter-spacing: -.04em; }
 .crowd-counts b.wine { color: #ff7aa6; }
 .map3d-crowd.tone-notified .crowd-counts b { color: var(--teal); }
 .map3d-crowd.tone-notified .crowd-counts b.wine { color: var(--wine); }
 
 .map3d-bubble { opacity: 0; transition: opacity .4s ease; }
 .map3d-bubble.visible { opacity: 1; }
-.map3d-bubble .map3d-card { position: relative; max-width: 158px; margin-bottom: 12px; padding: 7px 11px; border: 1px solid color-mix(in srgb, var(--wine) 25%, var(--line)); border-radius: 13px 13px 13px 3px; background: var(--white); color: var(--ink); font-size: 10.5px; font-weight: 620; line-height: 1.35; white-space: normal; box-shadow: 0 3px 0 var(--card-under), 0 10px 20px var(--card-shadow); }
+.map3d-bubble .map3d-card { position: relative; max-width: 140px; margin-bottom: 10px; padding: 6px 9px; border: 1px solid color-mix(in srgb, var(--wine) 25%, var(--line)); border-radius: 11px 11px 11px 3px; background: var(--white); color: var(--ink); font-size: 9.5px; font-weight: 620; line-height: 1.35; white-space: normal; box-shadow: 0 2px 0 var(--card-under), 0 8px 16px var(--card-shadow); }
 .map3d-bubble .map3d-card::after { content: ""; position: absolute; left: 10px; top: 100%; border: 6px solid transparent; border-top-color: var(--white); border-left-color: var(--white); }
 .map3d-bubble.visible .map3d-card { animation: bubblePop .55s var(--delay) cubic-bezier(.2, .9, .3, 1.35) both, bubbleBob 3.4s calc(var(--delay) + .6s) ease-in-out infinite; }
 
-.map3d-bug .map3d-card, .map3d-lock .map3d-card, .map3d-result .map3d-card { position: relative; display: flex; align-items: center; gap: 9px; padding: 8px 13px; border-radius: 13px; white-space: nowrap; }
+.map3d-bug .map3d-card, .map3d-lock .map3d-card, .map3d-result .map3d-card { position: relative; display: flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 10px; white-space: nowrap; }
 .map3d-bug .map3d-card::after { content: ""; position: absolute; left: calc(50% - 6px); bottom: 100%; border: 6px solid transparent; border-bottom-color: var(--tail, var(--white)); }
 .map3d-lock .map3d-card::after { content: ""; position: absolute; left: 100%; top: calc(50% - 6px); border: 6px solid transparent; border-left-color: var(--tail, var(--white)); }
-.map3d-bug b, .map3d-lock b, .map3d-result strong { display: block; font-size: 11.5px; }
-.map3d-bug span, .map3d-lock span, .map3d-result span { display: block; margin-top: 1px; font-size: 9.5px; }
+.map3d-bug b, .map3d-lock b, .map3d-result strong { display: block; font-size: 10px; }
+.map3d-bug span, .map3d-lock span, .map3d-result span { display: block; margin-top: 1px; font-size: 8.5px; }
 .map3d-bug.bug-hidden, .map3d-lock.lock-hidden { display: none; }
 .map3d-bug .map3d-card { margin-top: 12px; }
 .map3d-lock .map3d-card { margin-right: 12px; }
@@ -1184,9 +1184,9 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 
 .map3d-twin-title, .map3d-result { opacity: 0; transition: opacity .5s ease .5s; }
 .map3d-twin-title.visible, .map3d-result.visible { opacity: 1; }
-.map3d-twin-title .map3d-card { display: grid; gap: 2px; margin-bottom: 8px; padding: 8px 14px; border-radius: 13px; background: linear-gradient(160deg, #948cf0, #5f56c8); color: #fff; text-align: center; white-space: nowrap; box-shadow: 0 4px 0 #463e9e, 0 14px 30px rgba(95, 86, 200, .35); }
-.map3d-twin-title b { font-size: 12px; letter-spacing: .04em; }
-.map3d-twin-title span { font-size: 9.5px; opacity: .85; }
+.map3d-twin-title .map3d-card { display: grid; gap: 2px; margin-bottom: 7px; padding: 6px 11px; border-radius: 10px; background: linear-gradient(160deg, #948cf0, #5f56c8); color: #fff; text-align: center; white-space: nowrap; box-shadow: 0 3px 0 #463e9e, 0 10px 22px rgba(95, 86, 200, .35); }
+.map3d-twin-title b { font-size: 10px; letter-spacing: .04em; }
+.map3d-twin-title span { font-size: 8.5px; opacity: .85; }
 .map3d-result .map3d-card { border: 1px solid var(--line); background: var(--glass); backdrop-filter: blur(8px); box-shadow: 0 3px 0 var(--card-under), 0 10px 22px var(--card-shadow); }
 .map3d-result.pass .map3d-card { margin: 12px 0 0; }
 .map3d-result i { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; color: #fff; font-size: 12px; font-style: normal; font-weight: 800; }
@@ -1357,22 +1357,49 @@ html.map-fullscreen .map-stage { position: fixed; z-index: 65; inset: 0; height:
 /* Real-time clock */
 .live-clock { font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 720; color: var(--ink); padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--white); }
 
-/* Agents on the map: speech bubbles that follow each mascot */
-.agent-bubble .map3d-card { position: relative; display: grid; gap: 2px; width: max-content; max-width: 230px; margin-bottom: 10px; padding: 8px 12px 9px; border: 2px solid var(--agent); border-radius: 16px; background: var(--white); color: var(--ink); box-shadow: 0 4px 0 color-mix(in srgb, var(--agent) 35%, transparent), 0 12px 26px var(--card-shadow); transform-origin: 50% 100%; }
+/* Agents on the map: only the agent doing work gets an activity callout. */
+.agent-bubble { display: none; }
+.agent-bubble.working { display: block; }
+.agent-bubble .map3d-card { position: relative; display: grid; gap: 1px; width: max-content; max-width: 162px; margin-bottom: 7px; padding: 5px 8px 6px; border: 1.5px solid var(--agent); border-radius: 11px; background: var(--white); color: var(--ink); box-shadow: 0 2px 0 color-mix(in srgb, var(--agent) 35%, transparent), 0 8px 16px var(--card-shadow); transform-origin: 50% 100%; }
 .agent-bubble .map3d-card::after { content: ""; position: absolute; left: calc(50% - 8px); top: 100%; border: 8px solid transparent; border-top-color: var(--agent); }
 .agent-bubble .map3d-card::before { content: ""; position: absolute; z-index: 1; left: calc(50% - 6px); top: calc(100% - 3px); border: 6px solid transparent; border-top-color: var(--white); }
-.agent-bubble b { color: var(--agent); font-size: 9px; font-weight: 820; letter-spacing: .04em; text-transform: uppercase; filter: brightness(.82); }
-.agent-bubble span { font-size: 11px; font-weight: 620; line-height: 1.35; white-space: normal; }
-.agent-bubble.active .map3d-card { max-width: 260px; padding: 10px 14px 11px; }
-.agent-bubble.active span { font-size: 12px; }
-.agent-bubble.idle .map3d-card { opacity: .72; transform: scale(.88); }
-/* Speech bubbles are a full-screen detail; the docked map keeps the agents uncluttered. */
-html:not(.map-fullscreen) .agent-bubble { display: none; }
+.agent-bubble b { color: var(--agent); font-size: 7.5px; font-weight: 820; letter-spacing: .03em; text-transform: uppercase; filter: brightness(.82); }
+.agent-bubble span { font-size: 9px; font-weight: 620; line-height: 1.3; white-space: normal; }
+html.map-fullscreen .agent-bubble .map3d-card { max-width: 196px; margin-bottom: 8px; padding: 7px 10px 8px; border-radius: 13px; }
+html.map-fullscreen .agent-bubble b { font-size: 8px; }
+html.map-fullscreen .agent-bubble span { font-size: 10px; }
 .map3d-host.twin-mode .agent-bubble { opacity: 1 !important; }
-.map3d-host[data-mode="compact"] .agent-bubble span { display: none; }
-.map3d-host[data-mode="compact"] .agent-bubble .map3d-card { padding: 4px 8px; }
+.map3d-host[data-mode="compact"] .agent-bubble .map3d-card { max-width: 145px; padding: 4px 7px 5px; }
 .map3d-host.tight .agent-bubble span { font-size: 9px; }
 .map3d-host.tight .agent-bubble .map3d-card { max-width: 150px; padding: 5px 8px; }
+
+/* The embedded map is information-dense: labels stay subordinate to the topology. */
+html:not(.map-fullscreen) .map3d-label .map3d-card { grid-template-columns: 6px auto; gap: 1px 5px; margin-bottom: 8px; padding: 3px 6px 4px 5px; border-radius: 7px; box-shadow: 0 1px 0 var(--card-under), 0 5px 10px var(--card-shadow); }
+html:not(.map-fullscreen) .map3d-label .map3d-card::after { height: calc(8px + var(--lift, 0px)); }
+html:not(.map-fullscreen) .map3d-label .map3d-dot { width: 6px; height: 6px; }
+html:not(.map-fullscreen) .map3d-label strong { font-size: 8px; }
+html:not(.map-fullscreen) .map3d-label small { font-size: 7px; }
+html:not(.map-fullscreen) .map3d-label .map3d-card > em { margin-top: 2px; padding: 1px 4px; font-size: 7px; }
+html:not(.map-fullscreen) .map3d-hyp { gap: 2px; margin-top: 3px; padding-top: 3px; }
+html:not(.map-fullscreen) .map3d-hyp b,
+html:not(.map-fullscreen) .map3d-hyp span,
+html:not(.map-fullscreen) .map3d-hyp em { font-size: 7px; }
+html:not(.map-fullscreen) .map3d-hyp i { width: 62px; height: 3px; }
+html:not(.map-fullscreen) .map3d-crowd .map3d-card { min-width: 142px; padding: 6px 8px 7px 10px; border-radius: 9px; }
+html:not(.map-fullscreen) .map3d-crowd strong { font-size: 11px; }
+html:not(.map-fullscreen) .map3d-crowd small,
+html:not(.map-fullscreen) .map3d-crowd span { font-size: 7.5px; }
+html:not(.map-fullscreen) .crowd-counts { gap: 7px; margin-top: 3px; }
+html:not(.map-fullscreen) .crowd-counts b { font-size: 14px; }
+html:not(.map-fullscreen) .map3d-bug .map3d-card,
+html:not(.map-fullscreen) .map3d-lock .map3d-card,
+html:not(.map-fullscreen) .map3d-result .map3d-card { gap: 5px; padding: 4px 7px; border-radius: 8px; }
+html:not(.map-fullscreen) .map3d-bug b,
+html:not(.map-fullscreen) .map3d-lock b,
+html:not(.map-fullscreen) .map3d-result strong { font-size: 8.5px; }
+html:not(.map-fullscreen) .map3d-bug span,
+html:not(.map-fullscreen) .map3d-lock span,
+html:not(.map-fullscreen) .map3d-result span { font-size: 7px; }
 
 /* Overview agent dock: who is on point and what they are saying */
 .agent-mini.on-point { background: color-mix(in srgb, var(--agent) 9%, var(--white)); box-shadow: inset 0 -3px 0 var(--agent); }

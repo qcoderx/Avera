@@ -708,7 +708,7 @@ export class ServiceMap {
       group.add(sprite, shadow, ring, bubble);
       group.position.copy(posts[agent]);
       this.scene.add(group);
-      return { agent, frames, mode: 'listening', sprite, material, shadow, ring, bubble, group, post: posts[agent], spot: posts[agent], size: 0, active: false, text: '', headline: '', said: 0, pending: null };
+      return { agent, frames, mode: 'listening', sprite, material, shadow, ring, bubble, group, post: posts[agent], spot: posts[agent], size: 0, active: false, working: false, text: '', headline: '', said: 0, pending: null };
     };
     // Where each agent walks while it is working: right next to the problem it owns.
     const bug = this.edges.get('gb>bankx').curve;
@@ -731,9 +731,12 @@ export class ServiceMap {
       mascot.mode = { working: 'working', done: 'result' }[status.mode] || 'listening';
       mascot.idle = status.mode === 'idle';
       mascot.active = Boolean(status.active);
+      mascot.working = status.mode === 'working' && mascot.active;
       const el = mascot.bubble.element;
       el.classList.toggle('active', mascot.active);
       el.classList.toggle('idle', mascot.idle);
+      el.classList.toggle('working', mascot.working);
+      el.setAttribute('aria-hidden', mascot.working ? 'false' : 'true');
       el.dataset.mode = status.mode;
       mascot.pending = { headline: status.headline, text: lines?.[id] || status.lines[0] };
       // A new state (headline) shows at once; chatter within a state changes at most every 7 seconds.
@@ -762,7 +765,7 @@ export class ServiceMap {
       item(this.bugMarker.element, 'marker', 100, () => state().bug !== 'hidden' && !state().twin),
       item(this.lock.element, 'marker', 98, () => state().lock !== 'hidden'),
       item(this.crowdLabel.element, 'marker', 95),
-      ...Object.values(this.mascots).map((mascot) => ({ ...item(mascot.bubble.element, 'marker', 0), upOnly: true, priorityOf: () => (mascot.active ? 99 : 94) })),
+      ...Object.values(this.mascots).map((mascot) => ({ ...item(mascot.bubble.element, 'marker', 0, () => mascot.working), upOnly: true, priorityOf: () => 99 })),
       ...this.twinLabels.map((twinLabel) => item(twinLabel.element, 'marker', 92, () => state().twin)),
       ...[...this.nodes.values()].map((node) => ({ ...item(node.el, 'node', 0, () => !node.offscreen && !state().twin), node })),
       item(this.release.element, 'badge', 40, () => state().release && !state().twin),
