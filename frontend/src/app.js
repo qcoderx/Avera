@@ -490,7 +490,7 @@ function testsView() {
     </section>
     ${isLive() ? `<section class="twin-actions" data-reveal>
       <div><strong>Digital twin console</strong><span>Every action runs on detached copies of the simulated bank. The live route never changes here.</span></div>
-      <button class="secondary-button" data-live="twin" ${busy('twin')}>${icon('branch', 17)} Simulate Bank X via Gateway C</button>
+      <button class="secondary-button" data-live="twin" ${busy('twin')}>${icon('branch', 17)} Simulate Bank X via ${pretty(twinTarget())}</button>
       <button class="secondary-button" data-live="rerun" ${validated ? '' : 'disabled'} ${busy('rerun')}>${icon('reset', 17)} Rerun ${validated ? validated.id : 'validated'} test</button>
     </section>${consoleResult('tests')}` : ''}
     <div class="safety-note"><i>${icon('check')}</i><div><strong>Verification boundary held</strong><span>Tests ran with synthetic identities and zero-value transactions in a copy of the service graph.</span></div></div>`;
@@ -899,7 +899,7 @@ async function liveAction(action, target) {
       };
     },
     twin: async () => {
-      const receipt = await api.simulateTwin('gateway_c');
+      const receipt = await api.simulateTwin(twinTarget());
       state.consoleResult = {
         scope: 'tests',
         ok: receipt.candidate_failures <= receipt.baseline_failures,
@@ -924,6 +924,11 @@ async function liveAction(action, target) {
     },
   };
   await runBusy(action, actions[action], (error) => (error.status === 409 ? error.message : `${pretty(action)} failed: ${error.message}`));
+}
+
+// Compare the live Bank X route against the alternative: Gateway C before the reroute, Gateway B after.
+function twinTarget() {
+  return live.routes?.BANK_X === 'gateway_c' ? 'gateway_b' : 'gateway_c';
 }
 
 async function authAction(kind, role) {

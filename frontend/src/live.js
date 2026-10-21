@@ -192,10 +192,16 @@ export class LiveStore {
         this.feed(record, 'Customers retry stuck transfers', 'coral', 'Behaviour');
       }
     } else if (type === 'complaint') {
-      run.complaints.push({ id: data.id, ts, channel: data.channel, text: data.raw_text });
+      run.complaints.push({ id: data.id, ts, channel: data.channel, text: data.raw_text, customer: data.customer_token });
       if (run.complaints.length === 1) this.milestone('complaint', ts);
       if (run.complaints.length <= 3 || run.complaints.length % 5 === 0) this.feed(record, `“${data.raw_text}”`, 'coral', `Complaint · ${data.channel}`);
     } else if (type === 'incident') {
+      if (run.incident && run.incident.id !== data.id) {
+        // A re-investigation opens a new incident; its evidence and workflow start fresh.
+        Object.assign(run, { hypotheses: new Map(), tests: new Map(), reruns: [], fixPlan: null, blast: null, resolutions: [] });
+        ['hypotheses', 'validated', 'plan', 'impact', 'approvals', 'resolved'].forEach((key) => { delete run.milestones[key]; });
+        this.feed(record, `Re-investigation opened ${data.id}`, 'teal', 'Avera');
+      }
       const groups = (data.fingerprint?.groups || []).map(({ transactions, ...group }) => group);
       const behaviours = {};
       (data.fingerprint?.behaviours || []).forEach((item) => { behaviours[item.kind] = (behaviours[item.kind] || 0) + 1; });
@@ -227,7 +233,7 @@ export class LiveStore {
       this.feed(record, `${blast.customer_count.toLocaleString('en-NG')} affected customers found`, 'amber', 'Blast Radius');
     } else if (type === 'approval') {
       const previous = run.approvals.get(data.id);
-      run.approvals.set(data.id, { ...data, seq: record.sequence });
+      run.approvals.set(data.id, { ...data, seq: previous?.seq ?? record.sequence });
       if (!previous) {
         this.milestone('approvals', ts);
         this.feed(record, `${kindLabel(data.kind)} awaits ${pretty(data.payload?.required_role)} approval`, 'coral', 'Approval');
@@ -359,8 +365,10 @@ export function viewModel(store, routes) {
   const failureAt = run.failureTimes.length ? (Math.min(...run.failureTimes) - span[0]) / Math.max(1, span[1] - span[0]) : null;
 
   const blast = run.blast;
-  const complained = run.complaints.length;
+  // Complainers are the distinct customers behind complaint records; everyone else affected stayed silent.
+  const complained = new Set(run.complaints.map((item) => item.customer).filter(Boolean)).size;
   const affected = blast?.customer_count ?? 0;
+  const silent = Math.max(0, affected - complained);
   const behaviours = run.incident?.behaviours || {};
   const behaviourRows = [
     ['Retried transfers', behaviours.retries || 0],
@@ -456,9 +464,9 @@ export function viewModel(store, routes) {
       complained,
       transactions: blast?.txn_count ?? 0,
       affected,
-      silent: blast?.silent_count ?? 0,
+      silent,
       exposure: blast ? naira(blast.exposure_ngn) : '—',
-      prevention: affected ? Number((((blast?.silent_count ?? 0) / affected) * 100).toFixed(1)) : 0,
+      prevention: affected ? Number(((silent / affected) * 100).toFixed(1)) : 0,
       segments: behaviourRows,
       segmentsTitle: 'Behaviour signals',
       firstAffected: clock(m.failure, false),
@@ -479,7 +487,7 @@ export function viewModel(store, routes) {
     sms: sms?.payload?.message || '',
     timeline,
     demoSteps,
-    mapStates: liveMapStates({ step, hypotheses, blast, complained, affected, routes, run, applied, config, failing }),
+    mapStates: liveMapStates({ step, hypotheses, blast, complained, affected, silent, routes, run, applied, config, failing }),
   };
 }
 
@@ -498,7 +506,7 @@ function approvalTitle(item) {
 }
 
 // Map visuals follow the fixture story beats; numbers, suspects and routes come from the live run.
-function liveMapStates({ step, hypotheses, blast, complained, affected, routes, run, applied, config, failing }) {
+function liveMapStates({ step, hypotheses, blast, complained, affected, silent, routes, run, applied, config, failing }) {
   return fixture.mapStates.map((state, index) => {
     if (index !== step) return state;
     const next = structuredClone(state);
@@ -518,23 +526,23 @@ function liveMapStates({ step, hypotheses, blast, complained, affected, routes, 
       });
     }
     if (next.customers) {
-      const found = blast ? `${complained.toLocaleString('en-NG')} complained · ${(blast.silent_count || 0).toLocaleString('en-NG')} silent` : next.customers.detail;
-      next.customers = { ...next.customers, detail: index >= 4 ? found : next.customers.detail, counts: blast ? { affected, complained, silent: blast.silent_count } : null };
+      const found = blast ? `${complained.toLocaleString('en-NG')} complained · ${silent.toLocaleString('en-NG')} never did` : next.customers.detail;
+      next.customers = { ...next.customers, detail: index >= 4 ? found : next.customers.detail };
     }
     if (routes?.BANK_X && routes.BANK_X !== 'gateway_b' && applied) next.reroute = 'active';
-    next.insight = { ...next.insight, facts: liveFacts(index, next.insight.facts, { hypotheses, blast, affected, complained, run, config }) };
+    next.insight = { ...next.insight, facts: liveFacts(index, next.insight.facts, { hypotheses, affected, complained, silent, run, config }) };
     return next;
   });
 }
 
-function liveFacts(index, facts, { hypotheses, blast, affected, complained, run, config }) {
+function liveFacts(index, facts, { hypotheses, affected, complained, silent, run, config }) {
   const validated = hypotheses.find((item) => item.state === 'validated');
   const top = hypotheses[0];
   switch (index) {
-    case 1: return [['Failed transfers', (run.codes.ACK_TIMEOUT || 0).toLocaleString('en-NG')], ['Alerts raised', '0'], ['Customer reports', String(complained)]];
+    case 1: return [['Failed transfers', (run.codes.ACK_TIMEOUT || 0).toLocaleString('en-NG')], ['Alerts raised', '0'], ['Customer reports', String(run.complaints.length)]];
     case 2: return [['Signals fused', run.incident?.signals.toLocaleString('en-NG') || '—'], ['Suspect zones', String(run.incident?.suspectZones.length || 0)], ['Hypotheses', `${hypotheses.length} competing`]];
     case 3: return [['Tests run', String(run.tests.size)], ['Top hypothesis', top ? `${top.id} · ${top.confidence}%` : '—'], ['Validated', validated ? validated.zone : 'Testing']];
-    case 4: return [['Validated cause', validated ? `${validated.id} · ${validated.confidence}%` : '—'], ['Affected customers', affected.toLocaleString('en-NG')], ['Never complained', (blast?.silent_count ?? 0).toLocaleString('en-NG')]];
+    case 4: return [['Validated cause', validated ? `${validated.id} · ${validated.confidence}%` : '—'], ['Affected customers', affected.toLocaleString('en-NG')], ['Never complained', silent.toLocaleString('en-NG')]];
     case 5: return [['Simulated success', config?.payload?.simulated_success_rate != null ? `${(config.payload.simulated_success_rate * 100).toFixed(1)}%` : '—'], ['Containment ETA', run.fixPlan?.eta_containment || '—'], ['Rollback trigger', config?.payload?.rollback ? `errors > ${config.payload.rollback.threshold * 100}%` : '—']];
     case 6: return [['Ghost Test rerun', run.resolutions.some((item) => item.status === 'verified_pass') ? 'Passed' : 'Pending'], ['Bank X route', 'Gateway C'], ['Follow-ups', String(run.resolutions.find((item) => item.status === 'resolved')?.detail?.open_follow_ups?.length || 0)]];
     default: return facts;
