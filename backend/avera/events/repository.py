@@ -19,6 +19,10 @@ class EventRepository(Protocol):
 
     async def append(self, record: StreamRecord) -> tuple[StreamRecord, bool]: ...
 
+    async def append_many(
+        self, records: list[StreamRecord]
+    ) -> list[tuple[StreamRecord, bool]]: ...
+
     async def list_after(self, sequence: int, *, limit: int = 500) -> list[StreamRecord]: ...
 
     async def claim_outbox(self, *, limit: int = 100) -> list["OutboxItem"]: ...
@@ -75,6 +79,26 @@ class InMemoryEventRepository:
                 "record": sequenced, "attempts": 0, "status": "pending"
             }
             return sequenced, True
+
+    async def append_many(
+        self, records: list[StreamRecord]
+    ) -> list[tuple[StreamRecord, bool]]:
+        results: list[tuple[StreamRecord, bool]] = []
+        async with self._lock:
+            for record in records:
+                key = _record_key(record)
+                existing = self._by_key.get(key)
+                if existing is not None:
+                    results.append((existing, False))
+                    continue
+                sequenced = record.model_copy(update={"sequence": len(self._records) + 1})
+                self._records.append(sequenced)
+                self._by_key[key] = sequenced
+                self._outbox[sequenced.sequence] = {
+                    "record": sequenced, "attempts": 0, "status": "pending"
+                }
+                results.append((sequenced, True))
+        return results
 
     async def list_after(self, sequence: int, *, limit: int = 500) -> list[StreamRecord]:
         if sequence < 0 or limit < 1:
@@ -185,6 +209,86 @@ class PostgresEventRepository:
                 if existing is None:  # Defensive against an unexpected concurrent delete.
                     raise RuntimeError("idempotent event row disappeared during append")
                 return self._to_record(existing), False
+
+    async def append_many(
+        self, records: list[StreamRecord]
+    ) -> list[tuple[StreamRecord, bool]]:
+        if not records:
+            return []
+        keys = [_record_key(record) for record in records]
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute("SELECT pg_advisory_xact_lock(735251, 1)")
+                rows = await connection.fetch(
+                    """
+                    WITH input AS (
+                        SELECT item.object_type,
+                               item.object_id,
+                               item.occurred_at,
+                               item.data_text::jsonb AS data,
+                               item.ordinality
+                        FROM unnest($1::text[], $2::text[], $3::timestamptz[], $4::text[])
+                             WITH ORDINALITY AS item(
+                                 object_type, object_id, occurred_at, data_text, ordinality
+                             )
+                    ),
+                    deduplicated AS (
+                        SELECT DISTINCT ON (object_type, object_id, occurred_at)
+                               object_type, object_id, occurred_at, data, ordinality
+                        FROM input
+                        ORDER BY object_type, object_id, occurred_at, ordinality
+                    ),
+                    existing AS (
+                        SELECT event.sequence,
+                               event.object_type,
+                               event.object_id,
+                               event.occurred_at,
+                               event.data
+                        FROM deduplicated
+                        JOIN avera_stream_records AS event
+                          USING (object_type, object_id, occurred_at)
+                    ),
+                    inserted AS (
+                        INSERT INTO avera_stream_records
+                            (object_type, object_id, occurred_at, data)
+                        SELECT object_type, object_id, occurred_at, data
+                        FROM deduplicated
+                        ORDER BY ordinality
+                        ON CONFLICT (object_type, object_id, occurred_at) DO NOTHING
+                        RETURNING sequence, object_type, object_id, occurred_at, data
+                    ),
+                    resolved AS (
+                        SELECT sequence, object_type, object_id, occurred_at, data, true AS created
+                        FROM inserted
+                        UNION ALL
+                        SELECT sequence, object_type, object_id, occurred_at, data, false AS created
+                        FROM existing
+                    ),
+                    queued AS (
+                        INSERT INTO avera_event_outbox (sequence)
+                        SELECT sequence FROM inserted
+                        ON CONFLICT (sequence) DO NOTHING
+                    )
+                    SELECT resolved.sequence,
+                           resolved.object_type,
+                           resolved.occurred_at,
+                           resolved.data,
+                           (resolved.created
+                               AND input.ordinality = deduplicated.ordinality) AS created
+                    FROM input
+                    JOIN deduplicated USING (object_type, object_id, occurred_at)
+                    JOIN resolved USING (object_type, object_id, occurred_at)
+                    ORDER BY input.ordinality
+                    """,
+                    [key[0] for key in keys],
+                    [key[1] for key in keys],
+                    [key[2] for key in keys],
+                    [json.dumps(record.data, separators=(",", ":")) for record in records],
+                )
+        if len(rows) != len(records):
+            raise RuntimeError("bulk event append returned an incomplete result")
+        return [(self._to_record(row), row["created"]) for row in rows]
 
     async def list_after(self, sequence: int, *, limit: int = 500) -> list[StreamRecord]:
         if sequence < 0 or limit < 1:

@@ -15,7 +15,11 @@ The API defaults to in-memory storage and event delivery. The ignored local `bac
 
 For browser development, start the API on `127.0.0.1:8766` and the Vite app from `frontend/`. The Vite server proxies same-origin `/api/*` requests to the backend and strips the `/api` prefix; use `/api/stream` for SSE. Override `AVERA_API_PROXY_TARGET` in an ignored `frontend/.env.local` if the API runs elsewhere. No wildcard backend CORS is required.
 
+The hosted MVP API is `https://api.avera.clippit.click`. Frontend developers can set `AVERA_API_PROXY_TARGET=https://api.avera.clippit.click` in `frontend/.env.local` and continue calling same-origin `/api/*` routes through Vite.
+
 For durable mode, configure both `AVERA_DATABASE_URL` and `AVERA_KAFKA_BOOTSTRAP_SERVERS`. PostgreSQL stores the ordered stream and a transactional Kafka outbox; a background dispatcher retries unacknowledged notifications with bounded exponential backoff. On upgrade, legacy stream rows are queued once for delivery. Delivery is at-least-once, so downstream consumers should deduplicate by the event `sequence`. Kafka/Redpanda currently carries outbound event notifications, not inbound source ingestion.
+
+For a managed Kafka provider that requires authenticated TLS, set `AVERA_KAFKA_SECURITY_PROTOCOL=SASL_SSL`, `AVERA_KAFKA_SASL_MECHANISM`, `AVERA_KAFKA_SASL_USERNAME`, `AVERA_KAFKA_SASL_PASSWORD`, and `AVERA_KAFKA_CA_FILE` in the server environment. The CA file must be readable by the service user. Keep credentials out of the repository; local Redpanda can use the default `PLAINTEXT` setting.
 
 ## Test
 

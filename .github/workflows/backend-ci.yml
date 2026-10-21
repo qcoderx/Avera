@@ -1,0 +1,97 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+
+      - name: Install backend test dependencies
+        run: python -m pip install -r backend/requirements-dev.txt
+
+      - name: Run backend tests
+        env:
+          PYTHONPATH: backend
+        run: python -m pytest -q backend/tests
+
+  deploy:
+    name: Deploy backend to VPS
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure deployment SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.AVERA_VPS_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.AVERA_VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/avera_deploy
+          chmod 600 ~/.ssh/avera_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Sync backend only
+        env:
+          VPS_HOST: ${{ secrets.AVERA_VPS_HOST }}
+          VPS_USER: ${{ secrets.AVERA_VPS_USER }}
+        run: |
+          rsync -az --delete \
+            --exclude='.env' \
+            --exclude='.venv/' \
+            --exclude='__pycache__/' \
+            --exclude='.pytest_cache/' \
+            -e 'ssh -i ~/.ssh/avera_deploy' \
+            backend/ "$VPS_USER@$VPS_HOST:/opt/avera/backend/"
+
+      - name: Install dependencies and restart API
+        env:
+          VPS_HOST: ${{ secrets.AVERA_VPS_HOST }}
+          VPS_USER: ${{ secrets.AVERA_VPS_USER }}
+        run: |
+          ssh -i ~/.ssh/avera_deploy "$VPS_USER@$VPS_HOST" \
+            'python3 -m venv /opt/avera/backend/.venv && \
+             /opt/avera/backend/.venv/bin/python -m pip install --disable-pip-version-check -r /opt/avera/backend/requirements.txt && \
+             sudo /usr/bin/systemctl restart avera-api.service && \
+             sudo /usr/bin/systemctl is-active --quiet avera-api.service'
+
+      - name: Verify public API
+        run: |
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error --max-time 10 \
+              https://api.avera.clippit.click/health >/dev/null; then
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1

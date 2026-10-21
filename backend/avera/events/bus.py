@@ -6,7 +6,8 @@ import asyncio
 import contextlib
 import json
 import logging
-from typing import Protocol
+import ssl
+from typing import Any, Protocol
 from uuid import uuid4
 
 from avera.contracts import StreamRecord
@@ -84,16 +85,43 @@ class KafkaRedpandaEventBus(_SubscriberFanout):
         *,
         topic: str = "avera.stream.v1",
         dead_letter_topic: str = "avera.stream.dlq.v1",
+        security_protocol: str = "PLAINTEXT",
+        sasl_mechanism: str | None = None,
+        sasl_username: str | None = None,
+        sasl_password: str | None = None,
+        ca_file: str | None = None,
     ) -> None:
         super().__init__()
         self.bootstrap_servers = bootstrap_servers
         self.topic = topic
         self.dead_letter_topic = dead_letter_topic
+        self.security_protocol = security_protocol.strip().upper()
+        self.sasl_mechanism = sasl_mechanism.strip() if sasl_mechanism else None
+        self.sasl_username = sasl_username
+        self.sasl_password = sasl_password
+        self.ca_file = ca_file
         self._producer = None
         self._consumer = None
         self._consumer_task: asyncio.Task | None = None
         self.published_count = 0
         self.dead_letter_count = 0
+
+    def _client_options(self) -> dict[str, Any]:
+        if self.security_protocol == "PLAINTEXT":
+            return {"security_protocol": self.security_protocol}
+        if self.security_protocol != "SASL_SSL":
+            raise ValueError("Kafka security protocol must be PLAINTEXT or SASL_SSL")
+        if not all((self.sasl_mechanism, self.sasl_username, self.sasl_password)):
+            raise ValueError("SASL_SSL requires a mechanism, username, and password")
+        if not self.ca_file:
+            raise ValueError("SASL_SSL requires a CA certificate file")
+        return {
+            "security_protocol": self.security_protocol,
+            "sasl_mechanism": self.sasl_mechanism,
+            "sasl_plain_username": self.sasl_username,
+            "sasl_plain_password": self.sasl_password,
+            "ssl_context": ssl.create_default_context(cafile=self.ca_file),
+        }
 
     async def start(self) -> None:
         try:
@@ -101,13 +129,18 @@ class KafkaRedpandaEventBus(_SubscriberFanout):
         except ImportError as exc:  # pragma: no cover - exercised in configured deployments
             raise RuntimeError("Install aiokafka to enable Kafka/Redpanda integration") from exc
 
-        self._producer = AIOKafkaProducer(bootstrap_servers=self.bootstrap_servers)
+        client_options = self._client_options()
+        self._producer = AIOKafkaProducer(
+            bootstrap_servers=self.bootstrap_servers,
+            **client_options,
+        )
         self._consumer = AIOKafkaConsumer(
             self.topic,
             bootstrap_servers=self.bootstrap_servers,
             group_id=f"avera-api-{uuid4().hex}",
             auto_offset_reset="latest",
             enable_auto_commit=True,
+            **client_options,
         )
         await self._producer.start()
         try:

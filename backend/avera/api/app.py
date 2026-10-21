@@ -98,7 +98,14 @@ def _runtime_adapters() -> tuple[EventRepository, EventBus]:
             "Configure both AVERA_DATABASE_URL and AVERA_KAFKA_BOOTSTRAP_SERVERS, or neither"
         )
     if database_url and kafka_servers:
-        return PostgresEventRepository(database_url), KafkaRedpandaEventBus(kafka_servers)
+        return PostgresEventRepository(database_url), KafkaRedpandaEventBus(
+            kafka_servers,
+            security_protocol=os.getenv("AVERA_KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
+            sasl_mechanism=os.getenv("AVERA_KAFKA_SASL_MECHANISM"),
+            sasl_username=os.getenv("AVERA_KAFKA_SASL_USERNAME"),
+            sasl_password=os.getenv("AVERA_KAFKA_SASL_PASSWORD"),
+            ca_file=os.getenv("AVERA_KAFKA_CA_FILE"),
+        )
     return InMemoryEventRepository(), InMemoryEventBus()
 
 
@@ -190,20 +197,22 @@ def create_app(
     app.state.remediation_error = None
 
     investigation_requested = False
+    investigation_lock = asyncio.Lock()
 
     async def process_observations():
-        await simulator_adapter.flush()
-        result = await observability.run()
-        try:
-            handoff = remediation_runtime.make_handoff(observability)
-            if handoff is not None:
-                case = remediation_runtime.remediation.on_validated(handoff)
-                app.state.active_remediation_case_id = case.incident_id
-                app.state.remediation_error = None
-        except Exception as exc:
-            app.state.remediation_error = f"handoff_failed:{type(exc).__name__}"
-        await remediation_runtime.flush_events(service)
-        return result
+        async with investigation_lock:
+            await simulator_adapter.flush()
+            result = await observability.run()
+            try:
+                handoff = remediation_runtime.make_handoff(observability)
+                if handoff is not None:
+                    case = remediation_runtime.remediation.on_validated(handoff)
+                    app.state.active_remediation_case_id = case.incident_id
+                    app.state.remediation_error = None
+            except Exception as exc:
+                app.state.remediation_error = f"handoff_failed:{type(exc).__name__}"
+            await remediation_runtime.flush_events(service)
+            return result
 
     async def drain_investigation_requests():
         nonlocal investigation_requested

@@ -85,3 +85,27 @@ def test_successful_dead_letter_marks_terminal_outbox_state():
         assert len(bus.dead_letters) == 1
 
     asyncio.run(scenario())
+
+
+def test_bulk_ingestion_preserves_order_and_defers_delivery():
+    async def scenario():
+        repository = InMemoryEventRepository()
+        bus = FlakyBus()
+        service = EventStreamService(repository, bus)
+
+        outcomes = await service.ingest_many([
+            ("event", payload("bulk-1")),
+            ("event", payload("bulk-2")),
+            ("event", payload("bulk-1")),
+        ])
+
+        assert [item.record.sequence for item in outcomes] == [1, 2, 1]
+        assert [item.created for item in outcomes] == [True, True, False]
+        assert bus.published_count == 0
+        assert await repository.outbox_pending_count() == 2
+
+        assert await service.flush_outbox() == 2
+        assert bus.published_count == 2
+        assert await repository.outbox_pending_count() == 0
+
+    asyncio.run(scenario())

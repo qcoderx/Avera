@@ -15,12 +15,14 @@ logger = logging.getLogger(__name__)
 class SimulationIngestionAdapter:
     """Preserve simulator callback order while handing records to the async pipeline."""
 
-    def __init__(self, service: EventStreamService) -> None:
+    def __init__(self, service: EventStreamService, *, batch_size: int = 250) -> None:
         self.service = service
+        self.batch_size = batch_size
         self._queue: asyncio.Queue[tuple[ContractObjectType, dict[str, Any]] | None] = asyncio.Queue()
         self._early: list[tuple[ContractObjectType, dict[str, Any]]] = []
         self._loop: asyncio.AbstractEventLoop | None = None
         self._worker: asyncio.Task | None = None
+        self._last_error: Exception | None = None
         self.failures = 0
 
     def on_event(self, event: Event) -> None:
@@ -48,6 +50,10 @@ class SimulationIngestionAdapter:
     async def flush(self) -> None:
         """Wait until every simulator callback queued so far is ingested."""
         await self._queue.join()
+        if self._last_error is not None:
+            error = self._last_error
+            self._last_error = None
+            raise RuntimeError("simulator event ingestion failed") from error
 
     def _enqueue(self, kind: ContractObjectType, payload: dict[str, Any]) -> None:
         item = (kind, payload)
@@ -68,16 +74,33 @@ class SimulationIngestionAdapter:
     async def _run(self) -> None:
         while True:
             item = await self._queue.get()
-            try:
-                if item is None:
-                    return
-                kind, payload = item
-                await self.service.ingest(kind, payload)
-            except Exception:
-                self.failures += 1
-                logger.exception("Failed to ingest simulator callback")
-            finally:
+            if item is None:
                 self._queue.task_done()
+                return
+            batch = [item]
+            stop_after_batch = False
+            while len(batch) < self.batch_size:
+                try:
+                    queued = self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if queued is None:
+                    stop_after_batch = True
+                    break
+                batch.append(queued)
+            try:
+                await self.service.ingest_many(batch)
+            except Exception as exc:
+                self._last_error = exc
+                self.failures += len(batch)
+                logger.exception("Failed to ingest simulator callback batch")
+            finally:
+                for _ in batch:
+                    self._queue.task_done()
+                if stop_after_batch:
+                    self._queue.task_done()
+            if stop_after_batch:
+                return
 
 
 __all__ = ["SimulationIngestionAdapter"]
