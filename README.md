@@ -43,7 +43,7 @@ cd frontend
 npm run build
 ```
 
-The command centre includes incident health and feed, service map, hypotheses and Ghost Test runs, customer impact, fix plan, approvals, timeline, and institutional memory. The hidden demo controller opens from the header or with the `D` key and can replay the local fixture story.
+The command centre includes incident health and feed, service map, hypotheses and Ghost Test runs, customer impact, fix plan, approvals, timeline, and institutional memory. The service map is a Three.js story stage driven by the demo step. It shows the 1,109 affected customers as a crowd that turns coral as transfers fail silently, with the 13 complainers raised. The broken Gateway B acknowledgement is called out on the link itself, and hypothesis chips carry live confidence bars. A digital twin rises above the board while Ghost Tests run, and the reroute arc is locked until an engineer approves. A story bar, agent pipeline and clickable timeline narrate each moment,. The view is square to the board and only moves when you drag, scroll or use the zoom buttons. It falls back to the flat map when WebGL is unavailable. Add `?view=map&step=3` to the URL to open a specific view and step. The hidden demo controller opens from the header or with the `D` key and can replay the local fixture story.
 
 Run the backend regression suite, including ten full seeded incident cycles:
 
