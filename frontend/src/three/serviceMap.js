@@ -247,6 +247,7 @@ export class ServiceMap {
     this.buildStoryMarkers();
     this.buildMascots();
     this.bindPointer();
+    this.buildDeclutter();
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.host);
@@ -324,6 +325,7 @@ export class ServiceMap {
       const lane3d = label('map3d-lane', lane.label);
       lane3d.position.set(cx - this.boardCenter.x, -0.24, maxZ + 0.35);
       this.board.add(lane3d);
+      (this.laneLabels ||= []).push(lane3d.element);
     });
   }
 
@@ -632,6 +634,83 @@ export class ServiceMap {
       blast: make('blast', { working: ['work-a', 'work-b'], result: ['result'] }),
       resolution: make('resolution', { listening: ['listen-a', 'listen-b'], result: ['result'] }),
     };
+  }
+
+  // Every 3D label the declutter pass may move, with how much it matters when space runs out.
+  buildDeclutter() {
+    const state = () => this.state || this.fixture.mapStates[0];
+    const item = (el, kind, priority, active = () => true) => ({ el, kind, priority, active, offset: { x: 0, y: 0 }, target: { x: 0, y: 0 }, hidden: false });
+    const nodePriority = { critical: 80, proposed: 75, suspect: 70, patching: 65, watch: 55, cleared: 50, healthy: 45 };
+    this.declutterItems = [
+      item(this.bugMarker.element, 'marker', 100, () => state().bug !== 'hidden' && !state().twin),
+      item(this.lock.element, 'marker', 98, () => state().lock !== 'hidden'),
+      item(this.crowdLabel.element, 'marker', 95),
+      ...this.twinLabels.map((twinLabel) => item(twinLabel.element, 'marker', 92, () => state().twin)),
+      ...[...this.nodes.values()].map((node) => ({ ...item(node.el, 'node', 0, () => !node.offscreen && !state().twin), node })),
+      item(this.release.element, 'badge', 40, () => state().release && !state().twin),
+      ...this.bubbles.map((bubble, index) => item(bubble.element, 'badge', 30 - index, () => index < state().bubbles)),
+      ...this.laneLabels.map((el) => item(el, 'lane', 10)),
+    ];
+    this.declutterItems.filter((entry) => entry.node).forEach((entry) => {
+      entry.priorityOf = () => nodePriority[entry.node.status] + (entry.node.id === this.selected || entry.node.id === this.hovered ? 30 : 0);
+    });
+    this.declutterFrame = 0;
+  }
+
+  // Resolve overlapping labels in screen space: important labels claim space first,
+  // node labels rise on their stems, and minor labels step aside or fade out.
+  declutter() {
+    const items = this.declutterItems;
+    if (this.declutterFrame++ % 3 === 0) {
+      const placed = [];
+      const pad = 5;
+      const frame = this.host.getBoundingClientRect();
+      const outside = (box) => Math.max(0, frame.left + 4 - box.left) + Math.max(0, box.right - frame.right + 4) + Math.max(0, frame.top + 4 - box.top) + Math.max(0, box.bottom - frame.bottom + 4);
+      const hits = (box) => placed.reduce((sum, other) => {
+        const w = Math.min(box.right, other.right) - Math.max(box.left, other.left) + pad;
+        const h = Math.min(box.bottom, other.bottom) - Math.max(box.top, other.top) + pad;
+        return w > 0 && h > 0 ? sum + w * h : sum;
+      }, 0);
+      const live = items
+        .map((entry) => ({ entry, priority: entry.priorityOf ? entry.priorityOf() : entry.priority }))
+        .filter(({ entry }) => entry.active())
+        .sort((a, b) => b.priority - a.priority);
+      items.forEach((entry) => { if (!entry.active()) entry.target = { x: 0, y: 0 }; });
+      live.forEach(({ entry }) => {
+        const rect = entry.el.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const base = { left: rect.left - entry.offset.x, top: rect.top - entry.offset.y, width: rect.width, height: rect.height };
+        const candidates = [entry.target, { x: 0, y: 0 }];
+        const steps = entry.kind === 'node' ? [-12, -24, -36, -48, -62, -78, -96, -116, -140] : [-14, 14, -28, 28, -44, 44, -62, 62, -84, 84];
+        const sideways = entry.kind === 'node' ? [0, -40, 40, -80, 80] : [0, -60, 60];
+        sideways.forEach((x) => steps.forEach((y) => candidates.push({ x, y })));
+        if (entry.kind === 'node') sideways.slice(1).forEach((x) => candidates.splice(2, 0, { x, y: 0 }));
+        let best = null;
+        let bestScore = Infinity;
+        for (const candidate of candidates) {
+          const box = { left: base.left + candidate.x, top: base.top + candidate.y, right: base.left + candidate.x + base.width, bottom: base.top + candidate.y + base.height };
+          const score = hits(box) + outside(box) * 400;
+          if (score === 0) { best = { candidate, box }; bestScore = 0; break; }
+          if (score < bestScore) { bestScore = score; best = { candidate, box }; }
+        }
+        const minor = entry.kind !== 'node' && entry.kind !== 'marker';
+        entry.hidden = minor && bestScore > 0;
+        entry.target = entry.hidden ? { x: 0, y: 0 } : best.candidate;
+        if (!entry.hidden) placed.push(best.box);
+      });
+    }
+    const ease = reducedMotion ? 1 : 0.22;
+    items.forEach((entry) => {
+      entry.offset.x += (entry.target.x - entry.offset.x) * ease;
+      entry.offset.y += (entry.target.y - entry.offset.y) * ease;
+      if (Math.abs(entry.offset.x) < 0.3 && Math.abs(entry.offset.y) < 0.3 && !entry.target.x && !entry.target.y) entry.offset = { x: 0, y: 0 };
+      entry.el.style.translate = entry.offset.x || entry.offset.y ? `${entry.offset.x.toFixed(1)}px ${entry.offset.y.toFixed(1)}px` : '';
+      if (entry.kind === 'node') {
+        entry.el.style.setProperty('--lift', `${Math.max(0, -entry.offset.y).toFixed(1)}px`);
+        entry.el.style.setProperty('--shift', `${entry.offset.x.toFixed(1)}px`);
+      }
+      entry.el.classList.toggle('declutter-hidden', entry.hidden);
+    });
   }
 
   bindPointer() {
@@ -1062,6 +1141,7 @@ export class ServiceMap {
 
     this.renderer.render(this.scene, this.camera);
     this.labels.render(this.scene, this.camera);
+    this.declutter();
   }
 
   updateNodes(dt, time) {

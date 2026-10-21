@@ -951,15 +951,15 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 
 /* 3D service map */
 .map3d-host { position: absolute; inset: 0; overflow: hidden; isolation: isolate; }
-.map3d-host.twin-mode .map3d-label .map3d-card { opacity: .3; transform: scale(.94); }
-.map3d-host.twin-mode .map3d-bug, .map3d-host.twin-mode .map3d-badge { opacity: .3; }
+.map3d-host.twin-mode .map3d-label, .map3d-host.twin-mode .map3d-bug, .map3d-host.twin-mode .map3d-badge { opacity: 0; transition: opacity .4s ease; }
 .map3d-label.offscreen { visibility: hidden; }
+.declutter-hidden { opacity: 0 !important; transition: opacity .25s ease; }
 .map3d-canvas { display: block; width: 100%; height: 100%; outline: none; }
 .map3d-labels { position: absolute; inset: 0; pointer-events: none; }
 .map3d-labels > * { pointer-events: none; }
 .map3d-card { transition: transform .28s cubic-bezier(.2, .9, .3, 1.3), opacity .3s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease; transform-origin: 50% 100%; }
 .map3d-label .map3d-card { position: relative; display: grid; grid-template-columns: 8px auto; align-items: center; gap: 1px 7px; margin-bottom: 16px; padding: 6px 10px 7px 9px; border: 1px solid color-mix(in srgb, var(--mocha) 18%, var(--line)); border-radius: 11px; background: var(--glass); backdrop-filter: blur(8px); box-shadow: 0 3px 0 var(--card-under), 0 9px 18px var(--card-shadow); white-space: nowrap; }
-.map3d-label .map3d-card::after { content: ""; position: absolute; left: calc(50% - 1px); top: calc(100% + 1px); width: 2px; height: 15px; border-radius: 2px; background: linear-gradient(var(--line), transparent); }
+.map3d-label .map3d-card::after { content: ""; position: absolute; left: calc(50% - 1px - var(--shift, 0px)); top: calc(100% + 1px); width: 2px; height: calc(15px + var(--lift, 0px)); border-radius: 2px; background: linear-gradient(var(--line), transparent); }
 .status-critical .map3d-card::after { background: linear-gradient(var(--coral), transparent); }
 .status-suspect .map3d-card::after, .status-proposed .map3d-card::after { background: linear-gradient(var(--wine), transparent); }
 .map3d-dot { grid-row: span 2; width: 8px; height: 8px; border-radius: 50%; background: var(--teal); }
@@ -986,7 +986,7 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 .map3d-host.tight .map3d-label .map3d-card { padding: 4px 7px; margin-bottom: 10px; border-radius: 8px; }
 .map3d-host.tight .map3d-card strong { font-size: 9px; }
 .map3d-host.tight .map3d-card em { margin-top: 2px; font-size: 8px; }
-.map3d-host.tight .map3d-label .map3d-card::after { height: 9px; }
+.map3d-host.tight .map3d-label .map3d-card::after { height: calc(9px + var(--lift, 0px)); }
 .map3d-lane { padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--glass); color: var(--muted); font-size: 9px; font-weight: 760; letter-spacing: .09em; text-transform: uppercase; white-space: nowrap; }
 .map3d-badge .map3d-card { margin-top: 6px; padding: 5px 10px; border-radius: 999px; background: var(--wine); color: #fff; font-size: 9px; font-weight: 760; white-space: nowrap; box-shadow: 0 3px 0 var(--wine-deep), 0 8px 18px rgba(176, 19, 82, .3); transform: translateY(8px) scale(.8); }
 .map3d-badge.visible .map3d-card { transform: none; }
