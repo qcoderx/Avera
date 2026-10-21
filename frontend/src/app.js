@@ -824,6 +824,7 @@ async function decideLive(decision) {
     // Read the authoritative record first so the decision binds to the exact payload shown.
     const current = await api.approval(item.id, session.token);
     const decided = await api.decide(item.id, session.token, decision, current.payload_hash);
+    await refreshHealth();
     showToast(`${item.kind} ${decided.status} by ${decided.approver}. The audit record has been updated.`);
   }, (error) => {
     if (error.status === 401) auth.clear(item.requiredRole);
@@ -928,7 +929,9 @@ async function liveAction(action, target) {
 
 // Compare the live Bank X route against the alternative: Gateway C before the reroute, Gateway B after.
 function twinTarget() {
-  return live.routes?.BANK_X === 'gateway_c' ? 'gateway_b' : 'gateway_c';
+  const applied = [...store.run.resolutions].reverse().find((item) => item.action === 'apply_approved_reroute' && item.status === 'applied');
+  const route = applied?.detail?.to_route?.split('.')[0] || live.routes?.BANK_X;
+  return route === 'gateway_c' ? 'gateway_b' : 'gateway_c';
 }
 
 async function authAction(kind, role) {
