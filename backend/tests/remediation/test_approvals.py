@@ -96,12 +96,7 @@ def test_new_plan_supersedes_pending_code_patch_and_listener_rejects_stale_appro
 
 def test_http_router_maps_errors(case, remediation):
     app = FastAPI()
-    principal = {"value": ENGINEER}
-
-    def current_approver():
-        return principal["value"]
-
-    app.include_router(build_router(remediation.approvals, current_approver=current_approver))
+    app.include_router(build_router(remediation.approvals))
     client = TestClient(app)
     approval_id = case.approval_ids["config"]
     payload_hash = remediation.approvals.get(approval_id).payload_hash
@@ -109,16 +104,15 @@ def test_http_router_maps_errors(case, remediation):
     def post(body, headers=None):
         return client.post(f"/approvals/{approval_id}", json=body, headers=headers or {})
 
-    principal["value"] = DISPUTE
-    assert post({"decision": "approve", "payload_hash": payload_hash}).status_code == 403
-    assert client.get(f"/approvals/{approval_id}").status_code == 404
-    assert all(a["kind"] != "config" for a in client.get("/approvals", params={"status": "pending"}).json())
-
-    principal["value"] = ENGINEER
+    assert client.get(f"/approvals/{approval_id}").status_code == 200
+    assert any(a["kind"] == "config" for a in client.get("/approvals", params={"status": "pending"}).json())
     assert post({"decision": "approve", "payload_hash": "bad"}).status_code == 412
-    # These untrusted headers cannot override the verified principal supplied by the dependency.
+    # Public demo routes ignore any client-supplied identity or role and derive the role
+    # from the approval record itself.
     assert post({"decision": "approve", "payload_hash": payload_hash},
                 headers={"X-Avera-User": "attacker", "X-Avera-Role": "customer_dispute"}).status_code == 200
+    decided = remediation.approvals.get(approval_id)
+    assert decided.approver == "demo-platform-operator"
     assert post({"decision": "approve", "payload_hash": payload_hash}).status_code == 409
     assert client.get("/approvals/missing").status_code == 404
 

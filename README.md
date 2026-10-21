@@ -12,7 +12,7 @@ External operational and customer signals enter through an API gateway and Kafka
 
 The current implementation is a single-bank simulation, not a live banking integration. It includes simulated incident traffic, an ordered event API and SSE stream, deterministic Ghost Tests, an isolated route twin, evidence-scoped blast-radius analysis, in-platform approvals, and simulated route changes. PostgreSQL and Kafka/Redpanda can back the canonical event stream; local development defaults to in-memory adapters. Approval, audit, and remediation state are still in memory, so this is not yet production-deployable for a bank.
 
-Shaz's Observability Agent parses reported complaint facts, detects behavioural signals and incident changes, maps suspect components, generates competing hypotheses, and hands validated candidates to Ghost Test. Validated results now flow into remediation, which publishes the plan, blast radius, role-scoped approvals, and resolution events on the same stream. See [setup, run commands, evidence boundaries, and fixture limitations](docs/observability.md) and the [API contract and production persistence boundary](backend/avera/API_CONTRACT.md).
+Shaz's Observability Agent parses reported complaint facts, detects behavioural signals and incident changes, maps suspect components, generates competing hypotheses, and hands validated candidates to Ghost Test. Validated results now flow into remediation, which publishes the plan, blast radius, workflow approvals, and resolution events on the same stream. See [setup, run commands, evidence boundaries, and fixture limitations](docs/observability.md) and the [API contract and production persistence boundary](backend/avera/API_CONTRACT.md).
 
 Ghost Test can optionally use GPT-5.4 Mini to summarize aggregate test results. The model does not choose the verdict, score hypotheses, approve actions, or change routes. External source/platform connections shown in the design remain integration work.
 
@@ -40,7 +40,7 @@ Open `http://localhost:5173`.
 
 The frontend talks to the deployed API at `https://api.avera.clippit.click` by default: the Vite dev and preview servers proxy `/api/*` to it, so the browser stays same-origin. To use a local backend instead, set `AVERA_API_PROXY_TARGET=http://127.0.0.1:8766` in `frontend/.env`. A build hosted on another origin can call the API directly with `VITE_AVERA_API_BASE`, provided the API lists that origin in `AVERA_CORS_ORIGINS`.
 
-Every page renders the live `/stream`: incident, hypotheses, Ghost Test results, blast radius, fix plan, approvals and resolution events. The demo controller (`D`) starts a baseline, injects the failure, resets, investigates or replays the recorded stream. Approvals need a signed approver JWT for the required role. Locally, **Sign in** uses `/dev/auth/token` when `AVERA_DEV_AUTH_ENABLED=true`. Against the deployed API, paste a token from your identity provider. If the API is unreachable, the command centre falls back to the recorded fixture and retries the connection. Add `?mode=fixture` to force the recorded story.
+Every page renders the live `/stream`: incident, hypotheses, Ghost Test results, blast radius, fix plan, approvals and resolution events. The demo controller (`D`) starts a baseline, injects the failure, resets, investigates or replays the recorded stream. Approval routes are intentionally public for this simulated MVP; the server derives the workflow role and records decisions as `demo-platform-operator`. If the API is unreachable, the command centre falls back to the recorded fixture and retries the connection. Add `?mode=fixture` to force the recorded story.
 
 Build the frontend for production:
 
@@ -59,7 +59,7 @@ python -m pip install -r requirements-dev.txt
 PYTHONPATH=. pytest -q
 ```
 
-For complaint parsing and hypothesis investigation, set `OPENAI_API_KEY` and `AVERA_OBSERVABILITY_MODEL=gpt-5.4-mini` in the backend environment. Optional Ghost Test summaries use `AVERA_GHOST_SUMMARY_MODEL`; without it, summaries use the deterministic local fallback. Approval endpoints require an issuer-signed HS256 JWT and `AVERA_APPROVER_JWT_SECRET`, `AVERA_APPROVER_JWT_ISSUER`, and `AVERA_APPROVER_JWT_AUDIENCE` (see `backend/.env.example`). The API verifies tokens but does not issue them.
+For complaint parsing and hypothesis investigation, set `OPENAI_API_KEY` and `AVERA_OBSERVABILITY_MODEL=gpt-5.4-mini` in the backend environment. Optional Ghost Test summaries use `AVERA_GHOST_SUMMARY_MODEL`; without it, summaries use the deterministic local fallback.
 
 ## Safety boundary
 

@@ -1311,8 +1311,6 @@ html.map-fullscreen .map-stage { position: fixed; z-index: 65; inset: 0; height:
 .approver-bar.signed i { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: var(--teal); color: #fff; }
 .approver-bar.signed span { flex: 1; }
 .approver-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.token-form { display: flex; gap: 8px; }
-.token-form input { flex: 1; min-height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--white); color: var(--ink); font-size: 12px; }
 .primary-button.compact { min-height: 38px; }
 .status-superseded { background: var(--soft); color: var(--muted); text-decoration: line-through; }
 .route-diff.recon { grid-template-columns: repeat(3, 1fr); }

@@ -2,7 +2,7 @@ import './styles.css';
 import { fixture } from './fixtures.js';
 import { ServiceMap, webglAvailable } from './three/serviceMap.js';
 import { bindTilt, leaveView, revealView } from './motion.js';
-import { api, apiBase, auth, openStream } from './api.js';
+import { api, apiBase, openStream } from './api.js';
 import { LiveStore, viewModel, pretty, naira } from './live.js';
 import morphdom from 'morphdom';
 import { AgentDirector, AGENTS } from './agents.js';
@@ -25,7 +25,6 @@ const state = {
   selectedNode: null,
   mapFullscreen: false,
   busy: null,
-  tokenFormRole: null,
   consoleResult: null,
   remediation: null,
 };
@@ -582,7 +581,6 @@ function planView() {
   const header = (extra) => pageHeader('Fix plan', 'Containment, permanent resolution, rollback and verification.', extra);
   if (!plan) return `${header('')}${emptyState('No fix plan yet', 'The Resolution Agent drafts containment, permanent fix and reconciliation steps once Ghost Test validates a cause.', liveStartAction())}`;
   const remediation = state.remediation && state.remediation.incident_id === D.incident.id ? state.remediation : null;
-  const anyToken = auth.get('engineer') || auth.get('customer_dispute');
   return `
     ${header(plan.simulationSuccess != null ? `<div class="plan-confidence"><span>Simulation success</span><strong>${plan.simulationSuccess}%</strong></div>` : '')}
     <section class="plan-hero" data-reveal>
@@ -605,8 +603,8 @@ function planView() {
       </div>
       <ol class="remediation-tracks">${remediation.plan.steps.map((step) => `<li><b>${pretty(step.track)}</b><span>${step.title}</span><em>${step.eta_minutes} min${step.approval_kind ? ` · needs ${step.approval_kind} approval` : ''}</em></li>`).join('')}</ol>
       <p class="remediation-note">${remediation.events.length} resolution event${remediation.events.length === 1 ? '' : 's'} recorded · ${remediation.blast_radius.projection_basis}</p>`
-      : `<p class="remediation-note">${anyToken ? 'Load the full case record, including track estimates and the projected blast radius.' : 'Sign in as an approver on the Approvals page to read the full case record.'}</p>
-      <button class="secondary-button compact" data-live="remediation" ${anyToken && !state.busy ? '' : 'disabled'}>${icon('plan', 16)} Load case record</button>`}
+      : `<p class="remediation-note">Load the full case record, including track estimates and the projected blast radius.</p>
+      <button class="secondary-button compact" data-live="remediation" ${state.busy ? 'disabled' : ''}>${icon('plan', 16)} Load case record</button>`}
     </section>` : ''}`;
 }
 
@@ -616,7 +614,6 @@ function approvalsView() {
   if (!D.approvals.length) return `${header}${emptyState('Nothing awaits approval', 'Routing changes, customer messages, reconciliation batches and code patches appear here after the Blast Radius Agent plans the fix.', liveStartAction())}`;
   const active = D.approvals.find((item) => item.id === state.activeApproval) || D.approvals.find((item) => item.status === 'pending') || D.approvals[0];
   state.activeApproval = active.id;
-  const session = auth.get(active.requiredRole);
   const statusLabel = (item) => (item.closedReason === 'superseded' ? 'superseded' : item.status);
   const preview = { sms: phonePreview, config: routeChange, code: codeDiff, reconciliation: reconPreview }[active.rawKind] || (() => '');
   return `
@@ -630,8 +627,8 @@ function approvalsView() {
         <div class="approval-detail-head"><div><span>${active.id} · Level ${active.level} · needs ${active.owner}</span><h2>${active.title}</h2></div><em>${active.risk} risk</em></div>
         ${preview(active)}
         <div class="approval-why"><strong>Why this action is recommended</strong><p>${approvalReason(active)}</p></div>
-        ${approverBar(active, session)}
-        <div class="decision-actions"><button class="secondary-button" data-decision="reject" ${active.status !== 'pending' || !session || state.busy ? 'disabled' : ''}>Reject</button><button class="primary-button" data-decision="approve" ${active.status !== 'pending' || !session || state.busy ? 'disabled' : ''}>${active.status === 'pending' ? (state.busy === 'decide' ? 'Recording decision…' : 'Approve action') : `Decision: ${statusLabel(active)}${active.approver ? ` by ${active.approver}` : ''}`}</button></div>
+        ${approverBar(active)}
+        <div class="decision-actions"><button class="secondary-button" data-decision="reject" ${active.status !== 'pending' || state.busy ? 'disabled' : ''}>Reject</button><button class="primary-button" data-decision="approve" ${active.status !== 'pending' || state.busy ? 'disabled' : ''}>${active.status === 'pending' ? (state.busy === 'decide' ? 'Recording decision…' : 'Approve action') : `Decision: ${statusLabel(active)}${active.approver ? ` by ${active.approver}` : ''}`}</button></div>
       </div>
     </section>`;
 }
@@ -644,19 +641,9 @@ function etaHtml(text) {
   return `<strong>${figure}</strong>${note ? `<small>${note}</small>` : ''}`;
 }
 
-function approverBar(active, session) {
+function approverBar(active) {
   if (active.status !== 'pending') return '';
-  if (session) return `<div class="approver-bar signed"><i>${icon('check', 15)}</i><span>Signed in as <strong>${session.sub}</strong> · ${pretty(session.role)}</span><button class="text-button inline" data-auth="signout" data-role="${session.role}">Sign out</button></div>`;
-  const role = active.requiredRole;
-  const pasting = state.tokenFormRole === role;
-  return `<div class="approver-bar">
-    <span>Only a <strong>${pretty(role)}</strong> approver can decide this. Decisions are verified with a signed JWT.</span>
-    <div class="approver-actions">
-      <button class="secondary-button compact" data-auth="signin" data-role="${role}" ${state.busy ? 'disabled' : ''}>Sign in as ${pretty(role)}</button>
-      <button class="text-button inline" data-auth="paste" data-role="${role}">Use an identity-provider token</button>
-    </div>
-    ${pasting ? `<form class="token-form" data-token-form="${role}"><input name="token" type="password" autocomplete="off" placeholder="Paste a ${pretty(role)} JWT" required/><button class="primary-button compact" type="submit">Use token</button></form>` : ''}
-  </div>`;
+  return `<div class="approver-bar signed"><i>${icon('check', 15)}</i><span>Open simulated-MVP decision · workflow authority: <strong>${pretty(active.requiredRole)}</strong></span></div>`;
 }
 
 function approvalReason(item) {
@@ -851,8 +838,7 @@ function pendingReroute() {
 function drawApprovalPrompt() {
   const pending = state.loading || state.view === 'approvals' ? null : pendingReroute();
   const item = pending && !dismissedPrompts.has(pending.id) ? pending : null;
-  const session = item && isLive() ? auth.get(item.requiredRole) : null;
-  const key = item ? [item.id, state.busy, Boolean(session)].join('|') : '';
+  const key = item ? [item.id, state.busy].join('|') : '';
   if (key === promptRegion.dataset.key) return;
   promptRegion.dataset.key = key;
   if (!item) {
@@ -860,7 +846,6 @@ function drawApprovalPrompt() {
     return;
   }
   const reason = isLive() ? approvalReason(item) : `The digital twin passed ${D.fixPlan.simulationSuccess}% of synthetic transfers through Gateway C. Rollback is automatic if errors rise.`;
-  const signedIn = !isLive() || session;
   promptRegion.innerHTML = `
     <section class="approval-prompt" role="alertdialog" aria-labelledby="approval-prompt-title" aria-describedby="approval-prompt-reason">
       <img src="/assets/agents/resolution/agent-listen-a.png" alt=""/>
@@ -868,9 +853,9 @@ function drawApprovalPrompt() {
         <span class="prompt-agent"><i></i>Resolution · Waiting for approval</span>
         <h2 id="approval-prompt-title">${item.title}</h2>
         <p id="approval-prompt-reason">${reason}</p>
-        <small>Only ${item.owner} can approve this. Nothing changes in production until you do.${session ? ` Signed in as ${session.sub}.` : ''}</small>
+        <small>This public MVP applies decisions only to the simulated bank. Nothing changes until you approve.</small>
         <div class="prompt-actions">
-          <button class="primary-button" data-prompt="approve" ${state.busy ? 'disabled' : ''}>${state.busy === 'decide' || state.busy === 'signin' ? 'Recording decision…' : signedIn ? 'Approve reroute' : `Sign in & approve`}</button>
+          <button class="primary-button" data-prompt="approve" ${state.busy ? 'disabled' : ''}>${state.busy === 'decide' ? 'Recording decision…' : 'Approve reroute'}</button>
           <button class="secondary-button" data-prompt="review">Review details</button>
           <button class="text-button inline" data-prompt="later">Later</button>
         </div>
@@ -892,9 +877,7 @@ promptRegion.addEventListener('click', async (event) => {
   } else if (!isLive()) {
     decide('approved');
   } else {
-    if (!auth.get(item.requiredRole)) await authAction('signin', item.requiredRole);
-    if (auth.get(item.requiredRole)) await decideLive('approve');
-    else navigate('approvals');
+    await decideLive('approve');
   }
 });
 
@@ -944,25 +927,21 @@ function decide(decision) {
 }
 
 const DECISION_ERRORS = {
-  401: 'Your approver session is invalid or expired. Sign in again.',
-  403: 'This approver role cannot decide this action.',
-  404: 'This approval is not visible to your role.',
+  404: 'This approval no longer exists.',
   409: 'This approval is no longer pending.',
   412: 'The action changed since it was shown. Review the refreshed version and decide again.',
 };
 
 async function decideLive(decision) {
   const item = D.approvals.find((approval) => approval.id === state.activeApproval);
-  const session = item && auth.get(item.requiredRole);
-  if (!item || !session) return;
+  if (!item) return;
   await runBusy('decide', async () => {
     // Read the authoritative record first so the decision binds to the exact payload shown.
-    const current = await api.approval(item.id, session.token);
-    const decided = await api.decide(item.id, session.token, decision, current.payload_hash);
+    const current = await api.approval(item.id);
+    const decided = await api.decide(item.id, decision, current.payload_hash);
     await refreshHealth();
     showToast(`${item.kind} ${decided.status} by ${decided.approver}. The audit record has been updated.`);
   }, (error) => {
-    if (error.status === 401) auth.clear(item.requiredRole);
     return DECISION_ERRORS[error.status] || error.message;
   });
 }
@@ -1055,8 +1034,7 @@ async function liveAction(action, target) {
       };
     },
     remediation: async () => {
-      const session = auth.get('engineer') || auth.get('customer_dispute');
-      state.remediation = await api.remediation(D.incident.id, session.token);
+      state.remediation = await api.remediation(D.incident.id);
     },
   };
   await runBusy(action, actions[action], (error) => (error.status === 409 ? error.message : `${pretty(action)} failed: ${error.message}`));
@@ -1067,32 +1045,6 @@ function twinTarget() {
   const applied = [...store.run.resolutions].reverse().find((item) => item.action === 'apply_approved_reroute' && item.status === 'applied');
   const route = applied?.detail?.to_route?.split('.')[0] || live.routes?.BANK_X;
   return route === 'gateway_c' ? 'gateway_b' : 'gateway_c';
-}
-
-async function authAction(kind, role) {
-  if (kind === 'signout') {
-    auth.clear(role);
-    render();
-    return;
-  }
-  if (kind === 'paste') {
-    state.tokenFormRole = state.tokenFormRole === role ? null : role;
-    render();
-    document.querySelector('[data-token-form] input')?.focus();
-    return;
-  }
-  await runBusy('signin', async () => {
-    try {
-      const session = await auth.signIn(role);
-      showToast(`Signed in as ${session.sub}.`);
-    } catch (error) {
-      if (error.status === 404) {
-        state.tokenFormRole = role;
-        throw new Error('This API does not issue development tokens. Paste a token from your identity provider.');
-      }
-      throw error;
-    }
-  });
 }
 
 function exportAuditTrail() {
@@ -1110,11 +1062,10 @@ function bindEvents() {
     const hit = (selector) => event.target.closest(selector);
     let el;
     if ((el = hit('[data-view]'))) return navigate(el.dataset.view);
-    if ((el = hit('[data-approval]'))) { state.activeApproval = el.dataset.approval; state.tokenFormRole = null; return render(); }
+    if ((el = hit('[data-approval]'))) { state.activeApproval = el.dataset.approval; return render(); }
     if ((el = hit('[data-decision]'))) return decide(el.dataset.decision);
     if ((el = hit('[data-step]'))) return setStep(Number(el.dataset.step));
     if ((el = hit('[data-live]'))) return liveAction(el.dataset.live, el);
-    if ((el = hit('[data-auth]'))) return authAction(el.dataset.auth, el.dataset.role);
     if ((el = hit('[data-map-action]'))) {
       const action = el.dataset.mapAction;
       if (action === 'focus') return serviceMap?.focusSuspect();
@@ -1137,19 +1088,6 @@ function bindEvents() {
 
   app.addEventListener('submit', (event) => {
     const form = event.target;
-    if (form.matches('[data-token-form]')) {
-      event.preventDefault();
-      try {
-        const session = auth.set(new FormData(form).get('token'));
-        state.tokenFormRole = null;
-        showToast(`Token accepted for ${session.sub} (${pretty(session.role)}).`);
-        form.reset();
-        document.activeElement?.blur();
-        render();
-      } catch (error) {
-        showToast(error.message, 'bad');
-      }
-    }
     if (form.matches('[data-complaint-form]')) {
       event.preventDefault();
       const text = String(new FormData(form).get('text') || '').trim();

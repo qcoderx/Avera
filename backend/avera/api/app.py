@@ -8,14 +8,12 @@ import os
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
-from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-import jwt
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
@@ -45,7 +43,6 @@ from avera.simulation.bank import SimulatedBank
 from avera.observability.model import configured_model
 from avera.observability.orchestration import ObservabilityAgent
 from avera.observability.replay import replay_observations
-from avera.api.auth import current_approver
 from avera.api.observe import (
     OperationalLogHandler,
     OperationalLogStore,
@@ -54,9 +51,7 @@ from avera.api.observe import (
     remove_log_capture,
 )
 from avera.remediation.approvals.api import build_router as build_approval_router
-from avera.remediation.approvals import Approver
 from avera.remediation.integration import RemediationRuntime, build_runtime
-from avera.remediation.models import Role
 
 logger = logging.getLogger(__name__)
 
@@ -73,19 +68,6 @@ class IngestReceipt(BaseModel):
     record: dict[str, Any]
     created: bool
     delivery: str
-
-
-class DevAuthRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    role: Role
-
-
-class DevAuthTokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int
-    role: Role
 
 
 class ReplayReceipt(BaseModel):
@@ -271,9 +253,9 @@ def create_app(
         app.add_middleware(
             CORSMiddleware,
             allow_origins=cors_origins,
-            allow_credentials=True,
+            allow_credentials=False,
             allow_methods=["GET", "POST", "OPTIONS"],
-            allow_headers=["Authorization", "Content-Type", "Last-Event-ID"],
+            allow_headers=["Content-Type", "Last-Event-ID"],
             expose_headers=[
                 "X-Avera-Request-ID",
                 "X-Avera-Sequence",
@@ -431,7 +413,6 @@ def create_app(
 
     app.include_router(build_approval_router(
         remediation_runtime.remediation.approvals,
-        current_approver=current_approver,
         after_decision=lambda: remediation_runtime.flush_events(service),
     ))
     app.include_router(build_observe_router(operational_logs, observe_status_snapshot))
@@ -439,42 +420,6 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return await health_snapshot()
-
-    @app.post("/dev/auth/token", response_model=DevAuthTokenResponse)
-    async def issue_local_dev_token(
-        body: DevAuthRequest,
-        request: Request,
-        response: Response,
-    ) -> DevAuthTokenResponse:
-        """Issue a short-lived approver token for loopback-only local UI development."""
-        enabled = os.getenv("AVERA_DEV_AUTH_ENABLED", "").strip().casefold() in {"1", "true", "yes"}
-        environment = os.getenv("AVERA_ENVIRONMENT", "production").strip().casefold()
-        if not enabled or environment != "development":
-            raise HTTPException(status_code=404, detail="not found")
-
-        remote_host = request.client.host if request.client else ""
-        try:
-            if not ip_address(remote_host).is_loopback:
-                raise HTTPException(status_code=404, detail="not found")
-        except ValueError:
-            raise HTTPException(status_code=404, detail="not found") from None
-
-        secret = os.getenv("AVERA_APPROVER_JWT_SECRET", "")
-        if len(secret.encode("utf-8")) < 32:
-            raise HTTPException(status_code=503, detail="JWT verification is not configured")
-
-        now = int(time.time())
-        issuer = os.getenv("AVERA_APPROVER_JWT_ISSUER", "avera")
-        audience = os.getenv("AVERA_APPROVER_JWT_AUDIENCE", "avera-api")
-        subject = f"local-dev-{body.role.value}"
-        token = jwt.encode(
-            {"sub": subject, "role": body.role.value, "iss": issuer, "aud": audience,
-             "iat": now, "exp": now + 600},
-            secret,
-            algorithm="HS256",
-        )
-        response.headers["Cache-Control"] = "no-store"
-        return DevAuthTokenResponse(access_token=token, expires_in=600, role=body.role)
 
     @app.get("/service-map")
     async def service_map() -> dict[str, object]:
@@ -559,7 +504,7 @@ def create_app(
         return control_plane.twin.simulate(body)
 
     @app.get("/remediation/{incident_id}")
-    async def remediation_case(incident_id: str, _: Approver = Depends(current_approver)):
+    async def remediation_case(incident_id: str):
         case = remediation_runtime.remediation.store.get(incident_id)
         if case is None:
             raise HTTPException(status_code=404, detail="remediation case not found")

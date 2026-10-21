@@ -1,11 +1,9 @@
 """Observability integration checks. ScriptedModel is an explicit test double only."""
 import asyncio
 import json
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import jwt
 import pytest
 from fastapi.testclient import TestClient
 
@@ -63,12 +61,6 @@ def inject(client):
         "channel_switch_customers": 2})
 
 
-def approver_token(subject, role, secret="test-only-secret-material-at-least-32-bytes"):
-    now = int(time.time())
-    return jwt.encode({"sub": subject, "role": role, "iss": "avera", "aud": "avera-api",
-                       "iat": now, "exp": now + 300}, secret, algorithm="HS256")
-
-
 def test_healthy_then_injected_release_handoff_and_reset():
     model = ScriptedModel()
     with TestClient(create_app(observability_model=model)) as client:
@@ -95,9 +87,7 @@ def test_healthy_then_injected_release_handoff_and_reset():
         assert reset["state"] == "collecting"
 
 
-def test_validated_ghost_handoff_creates_jwt_gated_remediation_and_route_executes(monkeypatch):
-    secret = "test-only-secret-material-at-least-32-bytes"
-    monkeypatch.setenv("AVERA_APPROVER_JWT_SECRET", secret)
+def test_validated_ghost_handoff_creates_public_demo_approvals_and_route_executes():
     with TestClient(create_app(observability_model=ScriptedModel())) as client:
         inject(client)
         result = client.post("/observability/investigate").json()
@@ -105,36 +95,26 @@ def test_validated_ghost_handoff_creates_jwt_gated_remediation_and_route_execute
         case_id = client.get("/health").json()["remediation"]["case_id"]
         assert case_id == result["incident"]["id"]
 
-        engineer = {"Authorization": f"Bearer {approver_token('engineer-7', 'engineer', secret)}"}
-        dispute = {"Authorization": f"Bearer {approver_token('dispute-3', 'customer_dispute', secret)}"}
-        assert client.get("/approvals").status_code == 401
-        engineer_queue = client.get("/approvals", headers=engineer).json()
-        dispute_queue = client.get("/approvals", headers=dispute).json()
-        assert {item["kind"] for item in engineer_queue} == {"config"}
-        assert {item["kind"] for item in dispute_queue} == {"sms", "reconciliation"}
+        queue = client.get("/approvals")
+        assert queue.status_code == 200
+        approvals = queue.json()
+        assert {item["kind"] for item in approvals} == {"config", "sms", "reconciliation"}
 
-        config = engineer_queue[0]
-        assert client.get(f"/approvals/{config['id']}", headers=dispute).status_code == 404
-        assert client.post(f"/approvals/{config['id']}", headers=dispute,
-                           json={"decision": "approve", "payload_hash": config["payload_hash"]}).status_code == 403
-        decision = client.post(f"/approvals/{config['id']}", headers=engineer,
+        config = next(item for item in approvals if item["kind"] == "config")
+        assert client.get(f"/approvals/{config['id']}").status_code == 200
+        decision = client.post(f"/approvals/{config['id']}",
                                json={"decision": "approve", "payload_hash": config["payload_hash"]})
         assert decision.status_code == 200, decision.text
+        assert decision.json()["approver"] == "demo-platform-operator"
         assert client.get("/service-map").json()["routes"]["BANK_X"] == "gateway_c"
 
-        case = client.get(f"/remediation/{case_id}", headers=engineer)
+        case = client.get(f"/remediation/{case_id}")
         assert case.status_code == 200
         assert case.json()["blast_radius"]["txn_count"] > 0
         assert case.json()["events"]
         stream_records = client.app.state.event_repository._records
         streamed_types = {record.type.value for record in stream_records}
         assert {"approval", "resolution_event", "fix_plan", "blast_radius"} <= streamed_types
-
-        tampered = jwt.encode({"sub": "attacker", "role": "engineer", "iss": "avera", "aud": "avera-api",
-                               "iat": int(time.time()), "exp": int(time.time()) + 300},
-                              "wrong-signing-secret-material-000000000000", algorithm="HS256")
-        assert client.get("/approvals", headers={"Authorization": f"Bearer {tampered}"}).status_code == 401
-
 
 def make_agent(model=None):
     bank = SimulatedBank()

@@ -1,4 +1,4 @@
-"""The seeded bank demo remains repeatable after the approval API moved to JWT."""
+"""The seeded bank demo remains repeatable with public simulated approvals."""
 
 from __future__ import annotations
 
@@ -30,8 +30,9 @@ def test_demo_cycles_keep_route_mutations_behind_platform_approvals(monkeypatch)
             assert twin.json()["candidate_failures"] == 0
             assert client.get("/service-map").json()["routes"]["BANK_X"] == "gateway_b"
 
-            # The old body-asserted approver and unguarded route mutation are gone.
-            assert client.get("/approvals").status_code == 401
+            # Approval records are public, but route mutation still only happens through
+            # a valid workflow decision bound to its payload hash.
+            assert client.get("/approvals").status_code == 200
             assert client.post("/approvals", json={}).status_code == 405
             assert client.post("/admin/route", json={"approval_id": "anything"}).status_code == 404
 
