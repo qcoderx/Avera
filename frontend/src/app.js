@@ -17,6 +17,7 @@ const state = {
   theme: 'light',
   memoryQuery: '',
   selectedNode: null,
+  mapFullscreen: false,
 };
 
 const has3d = webglAvailable();
@@ -73,6 +74,8 @@ const iconPaths = {
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/>',
   focus: '<circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
+  expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  shrink: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
   orbit: '<ellipse cx="12" cy="12" rx="9" ry="4"/><path d="M12 3a9 4 90 0 1 0 18"/><circle cx="12" cy="12" r="1.5"/>',
 };
 
@@ -134,7 +137,7 @@ function shell(content) {
             <button class="demo-trigger" data-action="demo-panel"><span class="demo-dot"></span><span class="demo-step-no">${String(state.demoStep + 1).padStart(2, '0')}</span>${step.label}<kbd>D</kbd></button>
           </div>
         </header>
-        <main class="main-content ${state.loading ? 'is-loading' : ''}" id="main-content">${content}</main>
+        <main class="main-content view-${state.view} ${state.loading ? 'is-loading' : ''}" id="main-content">${content}</main>
       </div>
       ${demoPanel()}
       <div class="toast-region" aria-live="polite"></div>
@@ -340,7 +343,7 @@ function mapView() {
       <div class="stage-bottom">
         <button class="stage-play" data-action="play" aria-label="${state.playing ? 'Pause story' : 'Play story'}">${icon(state.playing ? 'pause' : 'play', 18)}</button>
         <ol class="stage-timeline" style="--progress:${state.demoStep / last}">${fixture.demoSteps.map((item, index) => `<li><button class="${index < state.demoStep ? 'done' : ''} ${index === state.demoStep ? 'current' : ''}" data-step="${index}"><time>${item.time}</time><span>${item.label}</span></button></li>`).join('')}</ol>
-        ${has3d ? `<div class="map-controls"><button data-map-action="focus">${icon('focus', 16)} Zoom to suspect</button><button data-map-action="reset">${icon('reset', 16)} Reset view</button></div>` : ''}
+        ${has3d ? `<div class="map-controls"><button data-map-action="focus">${icon('focus', 16)} Zoom to suspect</button><button data-map-action="reset">${icon('reset', 16)} Reset view</button>${fullscreenButton()}</div>` : ''}
         ${mapLegend()}
       </div>
     </section>`;
@@ -522,7 +525,10 @@ async function navigate(view) {
   navigating = true;
   await leaveView(document.querySelector('#main-content'));
   state.view = view;
-  if (view !== 'map') state.selectedNode = null;
+  if (view !== 'map') {
+    state.selectedNode = null;
+    setMapFullscreen(false);
+  }
   render();
   window.scrollTo({ top: 0 });
   document.querySelector('#main-content')?.focus({ preventScroll: true });
@@ -588,6 +594,7 @@ function bindEvents() {
   document.querySelector('[data-action="reset"]')?.addEventListener('click', () => { state.playing = false; clearInterval(playTimer); setStep(0); });
   document.querySelector('[data-action="theme"]')?.addEventListener('click', () => { state.theme = state.theme === 'light' ? 'dark' : 'light'; render(); });
   document.querySelector('[data-map-action="focus"]')?.addEventListener('click', () => serviceMap?.focusSuspect());
+  document.querySelector('[data-map-action="fullscreen"]')?.addEventListener('click', () => setMapFullscreen(!state.mapFullscreen));
   document.querySelectorAll('[data-map-action="reset"]').forEach((button) => button.addEventListener('click', () => serviceMap?.resetView()));
   document.querySelector('#memory-query')?.addEventListener('input', (event) => {
     state.memoryQuery = event.target.value;
@@ -601,8 +608,35 @@ function bindEvents() {
   });
 }
 
+function fullscreenButton() {
+  return `<button data-map-action="fullscreen" aria-pressed="${state.mapFullscreen}">${icon(state.mapFullscreen ? 'shrink' : 'expand', 16)} ${state.mapFullscreen ? 'Exit full screen' : 'Full screen'}</button>`;
+}
+
+// Full screen is a class on <html>, so it survives the re-renders that replace the map's markup.
+// The browser Fullscreen API is used when available to also hide the browser chrome.
+function setMapFullscreen(on) {
+  if (on === state.mapFullscreen) return;
+  state.mapFullscreen = on;
+  document.documentElement.classList.toggle('map-fullscreen', on);
+  if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+  if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  const button = document.querySelector('[data-map-action="fullscreen"]');
+  if (button) {
+    button.outerHTML = fullscreenButton();
+    document.querySelector('[data-map-action="fullscreen"]').addEventListener('click', () => setMapFullscreen(!state.mapFullscreen));
+  }
+}
+
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && state.mapFullscreen) setMapFullscreen(false);
+});
+
 document.addEventListener('keydown', (event) => {
-  if (event.key.toLowerCase() === 'd' && !['INPUT', 'TEXTAREA'].includes(event.target.tagName)) setDemoOpen(!state.demoOpen);
+  if (['INPUT', 'TEXTAREA'].includes(event.target.tagName)) return;
+  const key = event.key.toLowerCase();
+  if (key === 'd') setDemoOpen(!state.demoOpen);
+  if (key === 'f' && state.view === 'map' && has3d) setMapFullscreen(!state.mapFullscreen);
+  if (key === 'escape' && state.mapFullscreen) setMapFullscreen(false);
 });
 
 render();
