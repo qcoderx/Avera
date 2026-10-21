@@ -40,7 +40,22 @@ const CAMERA_DISTANCE = 90;
 const VIEW_DIRECTION = new THREE.Vector3(0, 0.62, 0.78).normalize();
 const TWIN_LIFT = 8;
 const PARTICLE_COUNT = 150;
-const FIELD = { centerX: -27.6, radius: 9.2, spacing: 0.52 };
+const CROWD = { spacing: 0.34, figure: 0.68, rightEdge: -18.4 };
+
+// Plain concentric rings of seats around the epicentre, filled from the centre outward.
+function ringSeats(count, spacing) {
+  const seats = [{ x: 0, z: 0, r: 0 }];
+  for (let ring = 1; seats.length < count; ring += 1) {
+    const r = ring * spacing;
+    const slots = Math.min(Math.round((2 * Math.PI * r) / spacing), count - seats.length);
+    const offset = ring * 0.37;
+    for (let i = 0; i < slots; i += 1) {
+      const angle = offset + (i / slots) * Math.PI * 2;
+      seats.push({ x: Math.cos(angle) * r, z: Math.sin(angle) * r, r });
+    }
+  }
+  return seats;
+}
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const format = new Intl.NumberFormat('en-NG');
 
@@ -259,8 +274,11 @@ export class ServiceMap {
   }
 
   layout() {
-    this.field = { ...FIELD, right: FIELD.centerX + FIELD.radius + 0.6 };
-    this.bounds = { minX: FIELD.centerX - FIELD.radius - 2.2, maxX: 18.6, minZ: -12.4, maxZ: 12.4 };
+    const seats = ringSeats(this.fixture.impact.affected, CROWD.spacing);
+    const radius = seats[seats.length - 1].r;
+    const centerX = CROWD.rightEdge - radius;
+    this.field = { ...CROWD, seats, radius, centerX };
+    this.bounds = { minX: centerX - radius - 2.2, maxX: 18.6, minZ: -12.4, maxZ: 12.4 };
     this.boardCenter = new THREE.Vector3((this.bounds.minX + this.bounds.maxX) / 2, 0, 0);
   }
 
@@ -334,7 +352,7 @@ export class ServiceMap {
 
   buildCrowd() {
     const t = THEMES[this.theme];
-    const { centerX, radius, spacing } = this.field;
+    const { centerX, radius, seats, figure } = this.field;
     const { affected, complained } = this.fixture.impact;
     const random = seeded(1109);
 
@@ -371,9 +389,9 @@ export class ServiceMap {
     // skin tone, and the phone screen glows.
     const torso = new THREE.CapsuleGeometry(0.11, 0.3, 4, 10).translate(0, 0.26, 0);
     const arm = (side) => new THREE.CapsuleGeometry(0.032, 0.15, 3, 6).rotateX(-1.05).translate(side * 0.1, 0.4, 0.085);
-    const shirtGeometry = mergeGeometries([torso, arm(-1), arm(1)]);
-    const headGeometry = new THREE.SphereGeometry(0.078, 14, 12).translate(0, 0.62, 0);
-    const phoneGeometry = new THREE.BoxGeometry(0.13, 0.19, 0.025).rotateX(-0.45).translate(0, 0.44, 0.19);
+    const shirtGeometry = mergeGeometries([torso, arm(-1), arm(1)]).scale(figure, figure, figure);
+    const headGeometry = new THREE.SphereGeometry(0.078, 14, 12).translate(0, 0.62, 0).scale(figure, figure, figure);
+    const phoneGeometry = new THREE.BoxGeometry(0.13, 0.19, 0.025).rotateX(-0.45).translate(0, 0.44, 0.19).scale(figure, figure, figure);
     // Darker base colours keep shirt and skin tones saturated under the bright studio light.
     this.crowdMat = new THREE.MeshStandardMaterial({ color: '#b8b8b8', roughness: 0.65, envMapIntensity: 0.4 });
     this.crowd = new THREE.InstancedMesh(shirtGeometry, this.crowdMat, affected);
@@ -386,21 +404,17 @@ export class ServiceMap {
     this.screenIdle = new THREE.Color('#8ce8da');
     const skins = ['#5c3a21', '#7a4a2a', '#8d5524', '#a86b3c', '#c68642', '#e0ac69'].map((hex) => new THREE.Color(hex));
 
-    // Phyllotaxis spiral: evenly packed disc, index order runs from the epicentre outward.
-    const golden = Math.PI * (3 - Math.sqrt(5));
-    const spread = spacing * 0.53;
     const complainerSlots = new Set();
     while (complainerSlots.size < complained) complainerSlots.add(Math.floor(random() * affected * 0.3));
     this.people = [];
     for (let i = 0; i < affected; i += 1) {
-      const r = spread * Math.sqrt(i + 0.5);
-      const angle = i * golden;
+      const seat = seats[i];
       const complainer = complainerSlots.has(i);
       this.people.push({
-        x: centerX + Math.cos(angle) * r,
-        z: Math.sin(angle) * r,
-        yaw: (random() - 0.5) * 1.1,
-        threshold: Math.min(0.999, (r / radius) * 0.94 + random() * 0.06),
+        x: centerX + seat.x,
+        z: seat.z,
+        yaw: (random() - 0.5) * 0.8,
+        threshold: Math.min(0.999, seat.r / (radius + 0.01)),
         complainer,
         color: this.crowdNeutral.clone(),
         screen: this.screenIdle.clone(),
@@ -1241,7 +1255,7 @@ export class ServiceMap {
       person.color.lerp(goal, blend);
       person.screen.lerp(screenGoal, blend);
       person.lift += ((complaining ? 0.22 + Math.abs(Math.sin(time * 4 + person.phase)) * 0.12 : 0) - person.lift) * blend;
-      this.tmpPos.set(person.x, 0.16 + person.lift, person.z);
+      this.tmpPos.set(person.x, 0.16 + person.lift * this.field.figure, person.z);
       this.tmpQuat.setFromAxisAngle(yAxis, person.yaw);
       this.tmpScale.setScalar(complaining ? 1.25 : 1);
       this.tmpMatrix.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
