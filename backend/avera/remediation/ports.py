@@ -90,6 +90,8 @@ class ContactDirectory(Protocol):
 
 
 class SmsGateway(Protocol):
+    """The provider must deduplicate repeated sends with the same key."""
+
     def send(self, to: str, text: str, idempotency_key: str) -> str: ...
 
 

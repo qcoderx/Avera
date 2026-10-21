@@ -60,13 +60,16 @@ flowchart TB
 
 ## Asks for Koded (needed but not in the API table)
 
-- [ ] Call `Remediation.on_validated(handoff)` after the 85% handoff rule, and mount `avera.remediation.approvals.api.build_router` for `POST /approvals/{id}`.
+- [ ] In the FastAPI lifespan, compose one remediation service and replace (do not duplicate) the existing `/approvals` routes with its router, using the application's verified-principal dependency; never trust client-supplied role headers.
+- [ ] Add an async durable action/outbox boundary: the current event service and Ghost Test are async, while remediation ports and approval listeners are synchronous.
+- [ ] Enrich the validated handoff with explicit impact-scope traits (`route`, `destination_bank`, `error_code`, and time bounds) from observed bank events. Observability's current generated incident fingerprint does not contain these fields, and remediation now rejects incomplete scope rather than counting every transaction.
 - [ ] Transfers by fingerprint traits and time window, complaints and behaviour signals by window (`BankData` port).
 - [ ] Live metrics: route error rate by destination and route over a window (rollback trigger).
 - [ ] Live "signals back to normal" check per incident (closing condition).
 - [ ] Flip the incident to `resolved` on `mark_incident_resolved`.
 - [ ] Contact directory: customer token to phone and SMS preference, resolved at send time.
 - [ ] Simulated SMS gateway with idempotency keys, feeding the customer phone view.
+- [ ] Durable retry worker/outbox for failed SMS recipients, invoking `ResolutionAgent.retry_approved_sms` with provider-side idempotency.
 - [ ] Sandbox runner for patches against the simulated bank's tests.
 - [ ] Gateway B failure implemented as a real defect in the connector code (ack timeout / retry handling), so the patch genuinely fixes it.
 - [ ] Seed data producing 1,284 transfers / 1,109 customers for the demo fingerprint, consistent with the 13 recorded complaints.

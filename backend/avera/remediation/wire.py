@@ -145,11 +145,15 @@ def approval(item: Approval) -> c.Approval | None:
 def resolution_event(event: ResolutionEvent) -> c.ResolutionEvent:
     return c.ResolutionEvent(
         id=event.id,
+        incident_id=event.incident_id,
+        ts=event.ts,
         action=str(event.action),
         status=event.status,
+        approval_id=event.approval_id,
         diff_url=event.diff_url,
         alert=event.alert.model_dump(mode="json") if event.alert else None,
         verified_by_ghost_test=event.verified_by_ghost_test,
+        detail=event.detail,
     )
 
 

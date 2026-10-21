@@ -3,24 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+import jwt
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from avera.contracts import Approval, ApprovalStatus, ContractObjectType
+from avera.contracts import ContractObjectType
 from avera.control import (
-    ApprovalCreateRequest,
-    ApprovalDecisionRequest,
     ControlPlane,
     DemoInjectRequest,
-    RouteApplyReceipt,
-    RouteApplyRequest,
     TwinSimulationReceipt,
     TwinSimulationRequest,
 )
@@ -42,6 +42,13 @@ from avera.simulation.bank import SimulatedBank
 from avera.observability.model import configured_model
 from avera.observability.orchestration import ObservabilityAgent
 from avera.observability.replay import replay_observations
+from avera.api.auth import current_approver
+from avera.remediation.approvals.api import build_router as build_approval_router
+from avera.remediation.approvals import Approver
+from avera.remediation.integration import RemediationRuntime, build_runtime
+from avera.remediation.models import Role
+
+logger = logging.getLogger(__name__)
 
 
 class IngestRequest(BaseModel):
@@ -56,6 +63,19 @@ class IngestReceipt(BaseModel):
     record: dict[str, Any]
     created: bool
     delivery: str
+
+
+class DevAuthRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Role
+
+
+class DevAuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    role: Role
 
 
 class ReplayReceipt(BaseModel):
@@ -119,8 +139,14 @@ def create_app(
         try:
             await bus.start()
             await simulator_adapter.start()
+            app.state.outbox_task = asyncio.create_task(dispatch_outbox(), name="avera-event-outbox")
             yield
         finally:
+            outbox_task = getattr(app.state, "outbox_task", None)
+            if outbox_task is not None:
+                outbox_task.cancel()
+                await asyncio.gather(outbox_task, return_exceptions=True)
+                app.state.outbox_task = None
             task = getattr(app.state, "observability_task", None)
             if task is not None:
                 task.cancel()
@@ -132,6 +158,15 @@ def create_app(
                 await summary_provider.close()
             await bus.close()
             await repository.close()
+
+    async def dispatch_outbox() -> None:
+        while True:
+            try:
+                await service.flush_outbox()
+            except Exception as exc:
+                service.metrics["outbox_dispatch_failures"] += 1
+                logger.error("Outbox dispatcher failed (%s)", type(exc).__name__)
+            await asyncio.sleep(1)
 
     app = FastAPI(
         title="Avera Event API",
@@ -148,18 +183,49 @@ def create_app(
     app.state.ghost_test_summary_provider = summary_provider
     app.state.observability_agent = observability
     app.state.observability_task = None
+    app.state.outbox_task = None
+    remediation_runtime: RemediationRuntime = build_runtime(simulated_bank)
+    app.state.remediation_runtime = remediation_runtime
+    app.state.active_remediation_case_id = None
+    app.state.remediation_error = None
+
+    investigation_requested = False
+
+    async def process_observations():
+        await simulator_adapter.flush()
+        result = await observability.run()
+        try:
+            handoff = remediation_runtime.make_handoff(observability)
+            if handoff is not None:
+                case = remediation_runtime.remediation.on_validated(handoff)
+                app.state.active_remediation_case_id = case.incident_id
+                app.state.remediation_error = None
+        except Exception as exc:
+            app.state.remediation_error = f"handoff_failed:{type(exc).__name__}"
+        await remediation_runtime.flush_events(service)
+        return result
+
+    async def drain_investigation_requests():
+        nonlocal investigation_requested
+        while investigation_requested:
+            investigation_requested = False
+            await process_observations()
 
     def schedule_investigation():
+        nonlocal investigation_requested
+        investigation_requested = True
         task = app.state.observability_task
         if task is None or task.done():
-            app.state.observability_task = asyncio.create_task(observability.run())
+            app.state.observability_task = asyncio.create_task(drain_investigation_requests())
 
     async def stop_investigation():
+        nonlocal investigation_requested
         task = app.state.observability_task
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         app.state.observability_task = None
+        investigation_requested = False
 
     control_plane = ControlPlane(
         simulated_bank,
@@ -168,13 +234,21 @@ def create_app(
         simulator_adapter.flush,
     )
     app.state.control_plane = control_plane
+    app.include_router(build_approval_router(
+        remediation_runtime.remediation.approvals,
+        current_approver=current_approver,
+        after_decision=lambda: remediation_runtime.flush_events(service),
+    ))
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
+        pending_outbox = await repository.outbox_pending_count()
         return {
             "status": "ok",
             "observability": {"state": observability.state, "model_configured": language_model is not None,
                               "errors": observability.errors},
+            "remediation": {"case_id": app.state.active_remediation_case_id,
+                            "error": app.state.remediation_error},
             "storage": "postgresql" if isinstance(repository, PostgresEventRepository) else "memory",
             "event_bus": "kafka" if isinstance(bus, KafkaRedpandaEventBus) else "memory",
             "simulator_queue_depth": simulator_adapter._queue.qsize(),
@@ -185,7 +259,44 @@ def create_app(
                 "fallbacks": ghost_test_agent.summary_failures,
             },
             "metrics": dict(service.metrics),
+            "outbox_pending": pending_outbox,
         }
+
+    @app.post("/dev/auth/token", response_model=DevAuthTokenResponse)
+    async def issue_local_dev_token(
+        body: DevAuthRequest,
+        request: Request,
+        response: Response,
+    ) -> DevAuthTokenResponse:
+        """Issue a short-lived approver token for loopback-only local UI development."""
+        enabled = os.getenv("AVERA_DEV_AUTH_ENABLED", "").strip().casefold() in {"1", "true", "yes"}
+        environment = os.getenv("AVERA_ENVIRONMENT", "production").strip().casefold()
+        if not enabled or environment != "development":
+            raise HTTPException(status_code=404, detail="not found")
+
+        remote_host = request.client.host if request.client else ""
+        try:
+            if not ip_address(remote_host).is_loopback:
+                raise HTTPException(status_code=404, detail="not found")
+        except ValueError:
+            raise HTTPException(status_code=404, detail="not found") from None
+
+        secret = os.getenv("AVERA_APPROVER_JWT_SECRET", "")
+        if len(secret.encode("utf-8")) < 32:
+            raise HTTPException(status_code=503, detail="JWT verification is not configured")
+
+        now = int(time.time())
+        issuer = os.getenv("AVERA_APPROVER_JWT_ISSUER", "avera")
+        audience = os.getenv("AVERA_APPROVER_JWT_AUDIENCE", "avera-api")
+        subject = f"local-dev-{body.role.value}"
+        token = jwt.encode(
+            {"sub": subject, "role": body.role.value, "iss": issuer, "aud": audience,
+             "iat": now, "exp": now + 600},
+            secret,
+            algorithm="HS256",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return DevAuthTokenResponse(access_token=token, expires_in=600, role=body.role)
 
     @app.get("/service-map")
     async def service_map() -> dict[str, object]:
@@ -235,8 +346,7 @@ def create_app(
 
     @app.post("/observability/investigate")
     async def observability_investigate():
-        await simulator_adapter.flush()
-        return await observability.run()
+        return await process_observations()
 
     @app.post("/observability/replay")
     async def observability_replay(until: datetime):
@@ -248,7 +358,13 @@ def create_app(
             observability.reset()
             for item in replay_observations(path, until):
                 observability.observe("event" if hasattr(item, "service") else "complaint", item.model_dump(mode="json"))
-        return await observability.run(until=until)
+        result = await observability.run(until=until)
+        handoff = remediation_runtime.make_handoff(observability)
+        if handoff is not None:
+            case = remediation_runtime.remediation.on_validated(handoff)
+            app.state.active_remediation_case_id = case.incident_id
+        await remediation_runtime.flush_events(service)
+        return result
 
     @app.post("/ghost-test/rerun", response_model=RerunReceipt, status_code=202)
     async def ghost_test_rerun(body: RerunRequest) -> RerunReceipt:
@@ -264,47 +380,34 @@ def create_app(
     async def twin_simulate(body: TwinSimulationRequest) -> TwinSimulationReceipt:
         return control_plane.twin.simulate(body)
 
-    @app.post("/approvals", response_model=Approval, status_code=201)
-    async def create_approval(body: ApprovalCreateRequest) -> Approval:
-        return await control_plane.create_approval(body)
-
-    @app.get("/approvals", response_model=list[Approval])
-    async def list_approvals(status: ApprovalStatus | None = Query(default=None)) -> list[Approval]:
-        approvals = list(control_plane.approvals.values())
-        if status is not None:
-            approvals = [approval for approval in approvals if approval.status == status]
-        return approvals
-
-    @app.get("/approvals/{approval_id}", response_model=Approval)
-    async def get_approval(approval_id: str) -> Approval:
-        approval = control_plane.approvals.get(approval_id)
-        if approval is None:
-            raise HTTPException(status_code=404, detail=f"unknown approval: {approval_id}")
-        return approval
-
-    @app.post("/approvals/{approval_id}", response_model=Approval)
-    async def decide_approval(approval_id: str, body: ApprovalDecisionRequest) -> Approval:
-        try:
-            return await control_plane.decide_approval(approval_id, body)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=f"unknown approval: {approval_id}") from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    @app.post("/admin/route", response_model=RouteApplyReceipt)
-    async def admin_route(body: RouteApplyRequest) -> RouteApplyReceipt:
-        try:
-            return await control_plane.apply_route(body.approval_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=f"unknown approval: {body.approval_id}") from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    @app.get("/remediation/{incident_id}")
+    async def remediation_case(incident_id: str, _: Approver = Depends(current_approver)):
+        case = remediation_runtime.remediation.store.get(incident_id)
+        if case is None:
+            raise HTTPException(status_code=404, detail="remediation case not found")
+        return {
+            "incident_id": case.incident_id,
+            "status": str(case.status),
+            "plan": case.plan.model_dump(mode="json"),
+            "blast_radius": case.blast_radius.model_dump(mode="json"),
+            "approval_ids": case.approval_ids,
+            "events": [event.model_dump(mode="json") for event in case.events],
+        }
 
     @app.post("/demo/start")
     async def demo_start() -> dict[str, object]:
         await stop_investigation()
         async with observability._lock:
             observability.reset()
+            app.state.active_remediation_case_id = None
+            app.state.remediation_error = None
+            remediation_runtime.remediation.approvals.reset_demo_state()
+            remediation_runtime.remediation.store.clear()
+            remediation_runtime.bank_data.clear()
+            remediation_runtime.world.bank.routes["BANK_X"] = "gateway_b.bank_x"
+            remediation_runtime.world.bank.applied.clear()
+            await remediation_runtime.flush_events(service)
+            await ghost_test_agent.reset()
             return await control_plane.start_demo()
 
     @app.post("/demo/inject")
@@ -322,6 +425,15 @@ def create_app(
         async with observability._lock:
             receipt = await control_plane.reset_demo()
             observability.reset()
+            app.state.active_remediation_case_id = None
+            app.state.remediation_error = None
+            remediation_runtime.remediation.approvals.reset_demo_state()
+            remediation_runtime.remediation.store.clear()
+            remediation_runtime.bank_data.clear()
+            remediation_runtime.world.bank.routes["BANK_X"] = "gateway_b.bank_x"
+            remediation_runtime.world.bank.applied.clear()
+            await remediation_runtime.flush_events(service)
+            await ghost_test_agent.reset()
             return receipt
 
     @app.get("/stream")

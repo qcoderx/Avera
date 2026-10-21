@@ -53,6 +53,8 @@ class ApprovalRepository(Protocol):
 
     def list(self, *, incident_id: str | None = None, status: ApprovalStatus | None = None) -> list[Approval]: ...
 
+    def clear(self) -> None: ...
+
 
 class InMemoryApprovalRepository:
     def __init__(self) -> None:
@@ -70,6 +72,9 @@ class InMemoryApprovalRepository:
             for a in sorted(self._items.values(), key=lambda a: a.requested_at)
             if (incident_id is None or a.incident_id == incident_id) and (status is None or a.status == status)
         ]
+
+    def clear(self) -> None:
+        self._items.clear()
 
 
 class ApprovalService:
@@ -102,6 +107,17 @@ class ApprovalService:
 
     def list(self, *, incident_id: str | None = None, status: ApprovalStatus | None = None) -> list[Approval]:
         return self._repo.list(incident_id=incident_id, status=status)
+
+    def reset_demo_state(self) -> None:
+        """Close pending demo decisions and clear them while retaining the audit trail."""
+        now = self._clock.now()
+        with self._lock:
+            for approval in self._repo.list(status=ApprovalStatus.PENDING):
+                self._transition(
+                    approval.model_copy(update={"status": ApprovalStatus.SUPERSEDED, "decided_at": now}),
+                    actor="system", action="demo_approval_reset",
+                )
+            self._repo.clear()
 
     def request(self, *, payload: ApprovalPayload, subject_key: str, requested_by: str) -> Approval:
         """Raise an approval. A newer request for the same subject supersedes any pending one."""

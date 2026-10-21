@@ -61,10 +61,11 @@ async def structured_call(model, instructions, context, schema, validate=lambda 
     if model is None:
         raise ModelUnavailable("model_not_configured")
     request_context = dict(context)
+    request_instructions = instructions
     for attempt in range(2):
         phase = "request"
         try:
-            value = await asyncio.wait_for(model.generate(instructions, request_context, schema), timeout=35)
+            value = await asyncio.wait_for(model.generate(request_instructions, request_context, schema), timeout=35)
             phase = "validation"
             value = schema.model_validate(value.model_dump() if isinstance(value, BaseModel) else value)
             return validate(value)
@@ -78,6 +79,22 @@ async def structured_call(model, instructions, context, schema, validate=lambda 
                     request_context["correction"] = "For each zone, routed_to must exactly match that zone's routed_to list in allowed_zones. Do not borrow another component's resolver tags."
                 elif str(exc) == "missing_component_support":
                     request_context["correction"] = "Each candidate's evidence_for needs a supplied observation of its component. Release candidates need a release/deployment reference; partner candidates can cite observations explicitly naming their destination."
+                elif str(exc) == "contradictory_reference_assignment":
+                    request_context["correction"] = (
+                        "For every hypothesis, evidence_for and evidence_against must be disjoint sets. "
+                        "Do not repeat any evidence ID across those two lists. Keep a supporting ID only "
+                        "in evidence_for; cite a different supplied observation in evidence_against only "
+                        "if it genuinely contradicts the claim. Otherwise return evidence_against as []."
+                    )
+                if type(exc).__name__ == "CandidateValidationError":
+                    # Put deterministic validator feedback in the instruction channel as
+                    # well as the JSON context; structured-output models may treat context
+                    # fields as evidence rather than as a required correction.
+                    request_instructions = (
+                        f"{instructions}\n\nVALIDATION RETRY — correct the previous output.\n"
+                        f"Validation code: {exc}. {request_context['correction']} "
+                        "Return a complete corrected object that satisfies this correction."
+                    )
             if attempt:
                 # Safe diagnostics: no exception text, request body, headers or key.
                 status = getattr(exc, "status_code", None)

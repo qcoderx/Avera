@@ -51,6 +51,7 @@ class ApprovalKind(StrEnum):
     SMS = "sms"
     CONFIG = "config"
     CODE = "code"
+    RECONCILIATION = "reconciliation"
 
 
 class ApprovalStatus(StrEnum):
@@ -215,11 +216,15 @@ class Approval(ContractModel):
 
 class ResolutionEvent(ContractModel):
     id: str = Field(min_length=1)
+    incident_id: str | None = None
+    ts: datetime | None = None
     action: str = Field(min_length=1)
     status: str = Field(min_length=1)
+    approval_id: str | None = None
     diff_url: str | None = None
     alert: dict[str, Any] | None = None
     verified_by_ghost_test: bool = False
+    detail: dict[str, Any] = Field(default_factory=dict)
 
 
 class StreamRecord(ContractModel):

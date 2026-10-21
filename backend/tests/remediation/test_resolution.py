@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from avera.contracts import ContractObjectType, ResolutionEvent as SharedResolutionEvent
+from avera.remediation.fixtures import build_demo_world
 from avera.remediation.models import ApprovalStatus, ResolutionAction
+from avera.remediation.pipeline import build_remediation
 from avera.remediation.store import RemediationStatus
 from tests.remediation.conftest import DISPUTE, ENGINEER, approve
 
@@ -65,6 +71,50 @@ def test_sms_respects_contact_preferences_and_is_idempotent(case, remediation, w
 
     remediation.resolution.on_decision(remediation.approvals.get(case.approval_ids["sms"]))
     assert len(world.sms.outbox) == sent["sent"]
+
+
+def test_failed_sms_recipient_can_be_retried_without_resending_successes():
+    world = build_demo_world()
+    delegate = world.sms
+    failed_token = next(
+        f"cust_demo_{index:04d}" for index in range(1, 1110)
+        if world.ports.contacts.resolve(f"cust_demo_{index:04d}").sms_opt_in
+    )
+
+    class FailOnceGateway:
+        def __init__(self, delegate):
+            self.delegate = delegate
+            self.failed_once = False
+            self.calls_by_token = {}
+
+        def send(self, to, text, idempotency_key):
+            token = idempotency_key.rsplit(":", 1)[-1]
+            self.calls_by_token[token] = self.calls_by_token.get(token, 0) + 1
+            if token == failed_token and not self.failed_once:
+                self.failed_once = True
+                raise TimeoutError("temporary SMS provider failure")
+            return self.delegate.send(to, text, idempotency_key)
+
+    gateway = FailOnceGateway(delegate)
+    remediation = build_remediation(replace(world.ports, sms=gateway))
+    case = remediation.on_validated(world.handoff)
+    approval = remediation.approvals.get(case.approval_ids["sms"])
+
+    remediation.approvals.decide(approval.id, decision="approve", approver=DISPUTE,
+                                 payload_hash=approval.payload_hash)
+    first = event(case, ResolutionAction.SMS_SENT)
+    assert first.detail["failed"] == 1
+    assert approval.id not in case.executed_approvals
+    assert len(delegate.outbox) == len(approval.payload.messages) - len(world.opted_out) - 1
+
+    retry = remediation.resolution.retry_approved_sms(approval.id)
+    assert retry.failed == 0
+    assert retry.sent == 1
+    assert gateway.calls_by_token[failed_token] == 2
+    assert len(delegate.outbox) == len(approval.payload.messages) - len(world.opted_out)
+    assert approval.id in case.executed_approvals
+    with pytest.raises(ValueError, match="no failed recipients"):
+        remediation.resolution.retry_approved_sms(approval.id)
 
 
 def test_sent_text_is_exactly_the_approved_text(case, remediation, world):
