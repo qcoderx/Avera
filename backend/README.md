@@ -17,6 +17,8 @@ For browser development, start the API on `127.0.0.1:8766` and the Vite app from
 
 The hosted MVP API is `https://api.avera.clippit.click`. Frontend developers can set `AVERA_API_PROXY_TARGET=https://api.avera.clippit.click` in `frontend/.env.local` and continue calling same-origin `/api/*` routes through Vite.
 
+The hosted operational console is `https://api.avera.clippit.click/observe`. It shows bounded, current-process application and access logs plus PostgreSQL, Kafka, and outbox state. The public feed is deliberately sanitized: request and response bodies, headers, client addresses, stack traces, broker hosts, credentials, and customer phone numbers are never included. History resets when the API process restarts; use the VPS journal for private, durable forensic logs.
+
 For durable mode, configure both `AVERA_DATABASE_URL` and `AVERA_KAFKA_BOOTSTRAP_SERVERS`. PostgreSQL stores the ordered stream and a transactional Kafka outbox; a background dispatcher retries unacknowledged notifications with bounded exponential backoff. On upgrade, legacy stream rows are queued once for delivery. Delivery is at-least-once, so downstream consumers should deduplicate by the event `sequence`. Kafka/Redpanda currently carries outbound event notifications, not inbound source ingestion.
 
 For a managed Kafka provider that requires authenticated TLS, set `AVERA_KAFKA_SECURITY_PROTOCOL=SASL_SSL`, `AVERA_KAFKA_SASL_MECHANISM`, `AVERA_KAFKA_SASL_USERNAME`, `AVERA_KAFKA_SASL_PASSWORD`, and `AVERA_KAFKA_CA_FILE` in the server environment. The CA file must be readable by the service user. Keep credentials out of the repository; local Redpanda can use the default `PLAINTEXT` setting.
@@ -37,6 +39,7 @@ The suite exercises the seeded incident path, the observability-to-remediation h
 - `GET /remediation/{incident_id}` — read the JWT-protected fix plan, blast radius, and resolution timeline.
 - `GET /approvals`, `GET /approvals/{id}`, `POST /approvals/{id}` — read role-scoped approvals and record a JWT-authenticated decision. The API verifies the issuer, audience, expiry, subject, and `role` claim; it does not issue tokens.
 - `GET /stream`, `GET /service-map`, `GET /health` — read ordered events, simulated topology, and service health.
+- `GET /observe` — open the live operational console. Supporting routes under `/observe/api/*` provide sanitized status, log history, and SSE updates to the page.
 - `POST /ingest/{source}`, `POST /replay` — ingest typed events or replay the bundled incident fixture.
 
 ## GPT and approver JWT configuration

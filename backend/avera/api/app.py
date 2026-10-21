@@ -11,6 +11,7 @@ from datetime import datetime
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import jwt
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -43,6 +44,13 @@ from avera.observability.model import configured_model
 from avera.observability.orchestration import ObservabilityAgent
 from avera.observability.replay import replay_observations
 from avera.api.auth import current_approver
+from avera.api.observe import (
+    OperationalLogHandler,
+    OperationalLogStore,
+    build_observe_router,
+    install_log_capture,
+    remove_log_capture,
+)
 from avera.remediation.approvals.api import build_router as build_approval_router
 from avera.remediation.approvals import Approver
 from avera.remediation.integration import RemediationRuntime, build_runtime
@@ -124,6 +132,8 @@ def create_app(
 
     assert repository is not None and bus is not None
     service = EventStreamService(repository, bus)
+    operational_logs = OperationalLogStore()
+    operational_log_handler = OperationalLogHandler(operational_logs)
     simulator_adapter = SimulationIngestionAdapter(service)
     simulated_bank = bank or SimulatedBank()
     simulated_bank.set_event_sinks(
@@ -142,11 +152,46 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        await repository.start()
+        install_log_capture(operational_log_handler)
+        operational_logs.append(
+            "INFO",
+            "avera.runtime",
+            "Avera API process starting",
+            kind="lifecycle",
+        )
+        repository_started = False
+        bus_started = False
+        simulator_started = False
         try:
+            await repository.start()
+            repository_started = True
+            operational_logs.append(
+                "INFO",
+                "avera.infrastructure",
+                "PostgreSQL connection established"
+                if isinstance(repository, PostgresEventRepository)
+                else "In-memory event repository ready",
+                kind="infrastructure",
+            )
             await bus.start()
+            bus_started = True
+            if isinstance(bus, KafkaRedpandaEventBus):
+                provider = "Aiven Kafka" if "aivencloud.com" in bus.bootstrap_servers else "Kafka"
+                operational_logs.append(
+                    "INFO",
+                    "avera.infrastructure",
+                    f"{provider} producer and consumer connected",
+                    kind="infrastructure",
+                )
             await simulator_adapter.start()
+            simulator_started = True
             app.state.outbox_task = asyncio.create_task(dispatch_outbox(), name="avera-event-outbox")
+            operational_logs.append(
+                "INFO",
+                "avera.runtime",
+                "Avera API is ready to receive traffic",
+                kind="lifecycle",
+            )
             yield
         finally:
             outbox_task = getattr(app.state, "outbox_task", None)
@@ -158,13 +203,23 @@ def create_app(
             if task is not None:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
-            await simulator_adapter.close()
+            if simulator_started:
+                await simulator_adapter.close()
             if language_model is not None and hasattr(language_model, "close"):
                 await language_model.close()
             if summary_provider is not None and hasattr(summary_provider, "close"):
                 await summary_provider.close()
-            await bus.close()
-            await repository.close()
+            if bus_started:
+                await bus.close()
+            if repository_started:
+                await repository.close()
+            operational_logs.append(
+                "INFO",
+                "avera.runtime",
+                "Avera API process stopped",
+                kind="lifecycle",
+            )
+            remove_log_capture(operational_log_handler)
 
     async def dispatch_outbox() -> None:
         while True:
@@ -182,6 +237,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.event_service = service
+    app.state.operational_logs = operational_logs
     app.state.event_repository = repository
     app.state.event_bus = bus
     app.state.simulated_bank = simulated_bank
@@ -195,6 +251,46 @@ def create_app(
     app.state.remediation_runtime = remediation_runtime
     app.state.active_remediation_case_id = None
     app.state.remediation_error = None
+
+    @app.middleware("http")
+    async def operational_request_log(request: Request, call_next):
+        started = time.perf_counter()
+        request_id = uuid4().hex[:12]
+        path = request.url.path
+        try:
+            response = await call_next(request)
+        except Exception:
+            if not path.startswith("/observe/api/"):
+                operational_logs.append(
+                    "ERROR",
+                    "avera.http",
+                    f"{request.method} {path} failed",
+                    kind="request",
+                    method=request.method,
+                    path=path,
+                    status=500,
+                    duration_ms=round((time.perf_counter() - started) * 1_000, 1),
+                    request_id=request_id,
+                )
+            raise
+
+        if not path.startswith("/observe/api/"):
+            level = "ERROR" if response.status_code >= 500 else (
+                "WARNING" if response.status_code >= 400 else "INFO"
+            )
+            operational_logs.append(
+                level,
+                "avera.http",
+                f"{request.method} {path} completed with {response.status_code}",
+                kind="request",
+                method=request.method,
+                path=path,
+                status=response.status_code,
+                duration_ms=round((time.perf_counter() - started) * 1_000, 1),
+                request_id=request_id,
+            )
+        response.headers["X-Avera-Request-ID"] = request_id
+        return response
 
     investigation_requested = False
     investigation_lock = asyncio.Lock()
@@ -243,14 +339,7 @@ def create_app(
         simulator_adapter.flush,
     )
     app.state.control_plane = control_plane
-    app.include_router(build_approval_router(
-        remediation_runtime.remediation.approvals,
-        current_approver=current_approver,
-        after_decision=lambda: remediation_runtime.flush_events(service),
-    ))
-
-    @app.get("/health")
-    async def health() -> dict[str, Any]:
+    async def health_snapshot() -> dict[str, Any]:
         pending_outbox = await repository.outbox_pending_count()
         return {
             "status": "ok",
@@ -270,6 +359,41 @@ def create_app(
             "metrics": dict(service.metrics),
             "outbox_pending": pending_outbox,
         }
+
+    async def observe_status_snapshot() -> dict[str, object]:
+        health = await health_snapshot()
+        if isinstance(bus, KafkaRedpandaEventBus):
+            kafka = {
+                "configured": True,
+                "provider": "aiven" if "aivencloud.com" in bus.bootstrap_servers else "kafka",
+                "state": "connected" if bus._producer is not None else "disconnected",
+                "security": bus.security_protocol,
+                "topic": bus.topic,
+                "published": bus.published_count,
+                "dead_lettered": bus.dead_letter_count,
+            }
+        else:
+            kafka = {
+                "configured": False,
+                "provider": "memory",
+                "state": "ready",
+                "security": "local",
+                "topic": None,
+                "published": getattr(bus, "published_count", 0),
+                "dead_lettered": len(getattr(bus, "dead_letters", [])),
+            }
+        return {"health": health, "kafka": kafka}
+
+    app.include_router(build_approval_router(
+        remediation_runtime.remediation.approvals,
+        current_approver=current_approver,
+        after_decision=lambda: remediation_runtime.flush_events(service),
+    ))
+    app.include_router(build_observe_router(operational_logs, observe_status_snapshot))
+
+    @app.get("/health")
+    async def health() -> dict[str, Any]:
+        return await health_snapshot()
 
     @app.post("/dev/auth/token", response_model=DevAuthTokenResponse)
     async def issue_local_dev_token(

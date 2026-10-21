@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Avera backend observability console" />
+    <title>Avera Observe</title>
+    <link rel="stylesheet" href="/observe/styles.css" />
+    <script src="/observe/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="masthead">
+        <a class="brand" href="/observe" aria-label="Avera Observe home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <strong>Avera</strong>
+          <span>Observe</span>
+        </a>
+        <div class="connection" id="connection-state" data-state="connecting">
+          <i aria-hidden="true"></i>
+          <span>Connecting to server</span>
+        </div>
+      </header>
+
+      <main>
+        <section class="intro" aria-labelledby="page-title">
+          <div>
+            <p class="path"><span>api.avera.clippit.click</span>/observe</p>
+            <h1 id="page-title">The backend, as it happens.</h1>
+            <p>Requests, application decisions, and infrastructure signals from this API process. Sensitive values are removed before they reach this screen.</p>
+          </div>
+          <dl class="runtime-stamp">
+            <div><dt>Process started</dt><dd id="started-at">—</dd></div>
+            <div><dt>Log window</dt><dd id="retained-count">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="health-ribbon" aria-label="Backend infrastructure health">
+          <article data-health="api">
+            <i aria-hidden="true"></i>
+            <div><span>API server</span><strong id="api-state">Checking</strong></div>
+            <small id="api-detail">—</small>
+          </article>
+          <article data-health="storage">
+            <i aria-hidden="true"></i>
+            <div><span>Event store</span><strong id="storage-state">Checking</strong></div>
+            <small>PostgreSQL</small>
+          </article>
+          <article data-health="kafka">
+            <i aria-hidden="true"></i>
+            <div><span>Event backbone</span><strong id="kafka-state">Checking</strong></div>
+            <small id="kafka-detail">Aiven Kafka</small>
+          </article>
+          <article data-health="outbox">
+            <i aria-hidden="true"></i>
+            <div><span>Delivery queue</span><strong id="outbox-state">Checking</strong></div>
+            <small id="outbox-detail">—</small>
+          </article>
+        </section>
+
+        <section class="ledger" aria-labelledby="ledger-title">
+          <header class="ledger-head">
+            <div>
+              <div class="title-line">
+                <h2 id="ledger-title">Server log</h2>
+                <span class="live-badge"><i></i>Live</span>
+              </div>
+              <p>Current process · newest entries appear at the bottom</p>
+            </div>
+            <div class="ledger-actions">
+              <button id="pause-button" class="action-button" type="button" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>
+                <span>Pause</span>
+              </button>
+              <button id="clear-button" class="action-button" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/></svg>
+                <span>Clear view</span>
+              </button>
+            </div>
+          </header>
+
+          <div class="controls">
+            <label class="search-field">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>
+              <span class="sr-only">Search logs</span>
+              <input id="search-input" type="search" placeholder="Find a path, component, status…" autocomplete="off" />
+              <kbd>/</kbd>
+            </label>
+            <div class="level-filter" role="group" aria-label="Filter by log level">
+              <button type="button" data-level="ALL" class="active">All <span id="count-all">0</span></button>
+              <button type="button" data-level="INFO">Info <span id="count-info">0</span></button>
+              <button type="button" data-level="WARNING">Warn <span id="count-warning">0</span></button>
+              <button type="button" data-level="ERROR">Error <span id="count-error">0</span></button>
+            </div>
+          </div>
+
+          <div class="column-head" aria-hidden="true">
+            <span>Time</span><span>Level</span><span>Origin</span><span>Message</span><span>Duration</span>
+          </div>
+          <div class="log-viewport" id="log-viewport" tabindex="0" aria-label="Live server logs">
+            <div class="pulse-rail" aria-hidden="true"></div>
+            <ol id="log-list"></ol>
+            <div class="empty-state" id="empty-state" hidden>
+              <span>No matching logs</span>
+              <p>Change the level or search filter to widen the view.</p>
+            </div>
+          </div>
+          <footer class="ledger-foot">
+            <span><i></i>Secrets, request bodies, headers, and stack traces are excluded.</span>
+            <span id="last-updated">Waiting for the first signal</span>
+          </footer>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
