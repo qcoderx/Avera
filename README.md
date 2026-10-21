@@ -43,7 +43,7 @@ cd frontend
 npm run build
 ```
 
-The command centre includes incident health and feed, service map, hypotheses and Ghost Test runs, customer impact, fix plan, approvals, timeline, and institutional memory. The hidden demo controller opens from the header or with the `D` key and can replay the local fixture story.
+The command centre includes incident health and feed, service map, hypotheses and Ghost Test runs, customer impact, fix plan, approvals, timeline, and institutional memory. The service map is a Three.js diorama driven by the demo step: suspect zones rise and pulse, transfers flow along each route, Ghost Test probes run the twin, and approved reroutes move Bank X traffic to Gateway C. It falls back to the flat map when WebGL is unavailable. Add `?view=map&step=3` to the URL to open a specific view and step. The hidden demo controller opens from the header or with the `D` key and can replay the local fixture story.
 
 Run the backend regression suite, including ten full seeded incident cycles:
 
