@@ -11,6 +11,7 @@ from datetime import datetime
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import jwt
@@ -97,6 +98,34 @@ class ReplayReceipt(BaseModel):
 
 class RuntimeConfigurationError(RuntimeError):
     pass
+
+
+def _cors_origins() -> list[str]:
+    """Return validated, exact browser origins from the deployment environment."""
+
+    configured = os.getenv("AVERA_CORS_ORIGINS", "")
+    origins: list[str] = []
+    for value in configured.split(","):
+        origin = value.strip().rstrip("/")
+        if not origin:
+            continue
+        parsed = urlsplit(origin)
+        if (
+            origin == "*"
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise RuntimeConfigurationError(
+                "AVERA_CORS_ORIGINS must contain exact http(s) origins without paths"
+            )
+        if origin not in origins:
+            origins.append(origin)
+    return origins
 
 
 def _runtime_adapters() -> tuple[EventRepository, EventBus]:
@@ -237,16 +266,20 @@ def create_app(
         description="Typed event ingestion and ordered, replayable incident streams.",
         lifespan=lifespan,
     )
-    # Browsers on other origins are blocked unless explicitly allowlisted; local development
-    # uses the same-origin Vite proxy instead.
-    cors_origins = [origin.strip() for origin in os.getenv("AVERA_CORS_ORIGINS", "").split(",") if origin.strip()]
+    cors_origins = _cors_origins()
     if cors_origins:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=cors_origins,
-            allow_methods=["GET", "POST"],
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["Authorization", "Content-Type", "Last-Event-ID"],
-            expose_headers=["X-Avera-Sequence", "X-Avera-Delivery"],
+            expose_headers=[
+                "X-Avera-Request-ID",
+                "X-Avera-Sequence",
+                "X-Avera-Delivery",
+            ],
+            max_age=600,
         )
     app.state.event_service = service
     app.state.operational_logs = operational_logs

@@ -15,7 +15,7 @@ The API defaults to in-memory storage and event delivery. The ignored local `bac
 
 For browser development, start the API on `127.0.0.1:8766` and the Vite app from `frontend/`. The Vite server proxies same-origin `/api/*` requests to the backend and strips the `/api` prefix; use `/api/stream` for SSE. Override `AVERA_API_PROXY_TARGET` in an ignored `frontend/.env.local` if the API runs elsewhere. No wildcard backend CORS is required.
 
-The hosted MVP API is `https://api.avera.clippit.click`. Frontend developers can set `AVERA_API_PROXY_TARGET=https://api.avera.clippit.click` in `frontend/.env.local` and continue calling same-origin `/api/*` routes through Vite.
+The hosted MVP API is `https://api.avera.clippit.click`. Frontend developers can set `AVERA_API_PROXY_TARGET=https://api.avera.clippit.click` in `frontend/.env.local` and continue calling same-origin `/api/*` routes through Vite. Deployed browser clients that call the API directly must be listed as exact, comma-separated origins in `AVERA_CORS_ORIGINS`; production currently allows `https://avera-lilac.vercel.app`. Wildcard origins are rejected because approvals carry authorization credentials.
 
 The hosted operational console is `https://api.avera.clippit.click/observe`. It shows bounded, current-process application and access logs plus PostgreSQL, Kafka, and outbox state. The public feed is deliberately sanitized: request and response bodies, headers, client addresses, stack traces, broker hosts, credentials, and customer phone numbers are never included. History resets when the API process restarts; use the VPS journal for private, durable forensic logs.
 
