@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "gsap": "^3.12.5",
+    "morphdom": "^2.7.4",
     "three": "^0.170.0",
     "vite": "latest"
   }

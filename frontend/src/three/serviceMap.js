@@ -676,25 +676,67 @@ export class ServiceMap {
       return texture;
     };
     const shadowTexture = radialTexture([[0, 0.5], [0.5, 0.22], [1, 0]]);
-    const make = (agent, modes) => {
-      const frames = Object.fromEntries(Object.entries(modes).map(([mode, list]) => [mode, list.map((frame) => load(agent, frame))]));
-      const material = new THREE.SpriteMaterial({ map: Object.values(frames)[0][0], transparent: true, depthWrite: false });
+    const colors = { observability: '#1EA896', ghost: '#8178D8', blast: '#F2A65A', resolution: '#FF715B' };
+    const names = { observability: 'Observability', ghost: 'Ghost Test', blast: 'Blast Radius', resolution: 'Resolution' };
+    // Each agent stands at its own post on the open front edge of the board, clear of the labels.
+    const front = this.bounds.maxZ - 1.3;
+    const posts = {
+      observability: new THREE.Vector3(-11.8, 0, front),
+      ghost: new THREE.Vector3(3.9, 0, front),
+      resolution: new THREE.Vector3(11.8, 0, front),
+      blast: new THREE.Vector3(this.field.centerX + 5.4, 0, this.field.radius + 2.6),
+    };
+    const make = (agent) => {
+      const frames = {
+        listening: ['listen-a', 'listen-b'].map((frame) => load(agent, frame)),
+        working: ['work-a', 'work-b'].map((frame) => load(agent, frame)),
+        result: ['result'].map((frame) => load(agent, frame)),
+      };
+      const material = new THREE.SpriteMaterial({ map: frames.listening[0], transparent: true, depthWrite: false, depthTest: false });
       const sprite = new THREE.Sprite(material);
       sprite.center.set(0.5, 0.05);
+      sprite.renderOrder = 10;
       sprite.scale.setScalar(0.001);
-      const shadow = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.8), new THREE.MeshBasicMaterial({ color: '#523f38', map: shadowTexture, transparent: true, opacity: 0, depthWrite: false }));
+      const shadow = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.95), new THREE.MeshBasicMaterial({ color: '#523f38', map: shadowTexture, transparent: true, opacity: 0, depthWrite: false }));
       shadow.rotation.x = -Math.PI / 2;
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 48), new THREE.MeshBasicMaterial({ color: colors[agent], transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.03;
+      const bubble = label('agent-bubble', `<div class="map3d-card"><b>${names[agent]}</b><span></span></div>`, [0.5, 1]);
+      bubble.element.style.setProperty('--agent', colors[agent]);
       const group = new THREE.Group();
-      group.add(sprite, shadow);
+      group.add(sprite, shadow, ring, bubble);
+      group.position.copy(posts[agent]);
       this.scene.add(group);
-      return { agent, frames, mode: Object.keys(modes)[0], sprite, material, shadow, group, size: 0, visible: false };
+      return { agent, frames, mode: 'listening', sprite, material, shadow, ring, bubble, group, post: posts[agent], size: 0, active: false, text: '' };
     };
-    this.mascots = {
-      observability: make('observability', { listening: ['listen-a', 'listen-b'], working: ['work-a', 'work-b'], result: ['result'] }),
-      ghost: make('ghost', { working: ['work-a', 'work-b'], result: ['result'] }),
-      blast: make('blast', { working: ['work-a', 'work-b'], result: ['result'] }),
-      resolution: make('resolution', { listening: ['listen-a', 'listen-b'], result: ['result'] }),
-    };
+    this.mascots = Object.fromEntries(Object.keys(posts).map((agent) => [agent, make(agent)]));
+    Object.values(this.mascots).forEach((mascot, index) => gsap.to(mascot, { size: 1, duration: reducedMotion ? 0 : 0.8, delay: reducedMotion ? 0 : 0.4 + index * 0.12, ease: 'back.out(2.2)' }));
+  }
+
+  // Live agent activity from the app: mode, who is on point, and what each one is saying.
+  setAgents(statuses, lines) {
+    if (!this.mascots) return;
+    Object.entries(this.mascots).forEach(([id, mascot]) => {
+      const status = statuses?.[id];
+      if (!status) return;
+      mascot.mode = { working: 'working', done: 'result' }[status.mode] || 'listening';
+      mascot.idle = status.mode === 'idle';
+      mascot.active = Boolean(status.active);
+      const text = lines?.[id] || status.lines[0];
+      const el = mascot.bubble.element;
+      el.classList.toggle('active', mascot.active);
+      el.classList.toggle('idle', mascot.idle);
+      el.dataset.mode = status.mode;
+      if (text !== mascot.text) {
+        mascot.text = text;
+        el.querySelector('b').textContent = `${{ observability: 'Observability', ghost: 'Ghost Test', blast: 'Blast Radius', resolution: 'Resolution' }[id]} · ${status.headline}`;
+        el.querySelector('span').textContent = text;
+        el.classList.remove('pop');
+        void el.offsetWidth;
+        el.classList.add('pop');
+      }
+    });
   }
 
   // Every 3D label the declutter pass may move, with how much it matters when space runs out.
@@ -706,6 +748,7 @@ export class ServiceMap {
       item(this.bugMarker.element, 'marker', 100, () => state().bug !== 'hidden' && !state().twin),
       item(this.lock.element, 'marker', 98, () => state().lock !== 'hidden'),
       item(this.crowdLabel.element, 'marker', 95),
+      ...Object.values(this.mascots).map((mascot) => ({ ...item(mascot.bubble.element, 'marker', 0), priorityOf: () => (mascot.active ? 99 : 94) })),
       ...this.twinLabels.map((twinLabel) => item(twinLabel.element, 'marker', 92, () => state().twin)),
       ...[...this.nodes.values()].map((node) => ({ ...item(node.el, 'node', 0, () => !node.offscreen && !state().twin), node })),
       item(this.release.element, 'badge', 40, () => state().release && !state().twin),
@@ -965,7 +1008,7 @@ export class ServiceMap {
 
   // Live data replaces the recorded fixture's numbers, hypotheses and approvals.
   setData(data) {
-    this.fixture = { ...this.fixture, hypotheses: data.hypotheses, impact: data.impact, approvals: data.approvals, mapStates: data.mapStates, incident: data.incident };
+    this.fixture = { ...this.fixture, hypotheses: data.hypotheses, impact: data.impact, approvals: data.approvals, mapStates: data.mapStates, incident: data.incident, times: data.times };
   }
 
   setStep(step, force = false) {
@@ -1017,6 +1060,7 @@ export class ServiceMap {
     this.renderBug(state.bug);
     this.renderLock(state.lock);
     this.release.element.classList.toggle('visible', state.release);
+    this.release.element.querySelector('.map3d-card').innerHTML = `<b>App v4.2</b> released at ${this.fixture.times?.release || '10:42'}`;
     this.placeMascots(step);
   }
 
@@ -1049,7 +1093,7 @@ export class ServiceMap {
     el.className = `map3d-bug bug-${mode}`;
     const copy = {
       hidden: '',
-      silent: `<div class="map3d-card"><b>Acks stopped · 10:42</b><span>No alert fired. Nobody knows yet.</span></div>`,
+      silent: `<div class="map3d-card"><b>Acks stopped · ${this.fixture.times?.failure || '10:42'}</b><span>No alert fired. Nobody knows yet.</span></div>`,
       alert: `<div class="map3d-card">${WARN_ICON}<div><b>ACK TIMEOUT</b><span>Gateway B → Bank X · debits with no credit</span></div></div>`,
       bypassed: `<div class="map3d-card"><b>Bypassed</b><span>Bank X now routes via Gateway C</span></div>`,
     }[mode];
@@ -1066,29 +1110,10 @@ export class ServiceMap {
   }
 
   placeMascots(step) {
-    const at = (id, offset) => this.nodes.get(id).home.clone().add(offset);
-    const plan = {
-      observability: step <= 2 ? { mode: step === 2 ? 'working' : 'listening', pos: step === 2 ? at('router', new THREE.Vector3(2.2, 0, -2.6)) : at('api', new THREE.Vector3(1.9, 0, -1.6)) } : null,
-      ghost: step === 3 ? { mode: 'working', ride: true } : null,
-      blast: step === 4 || step === 5 ? { mode: step === 4 ? 'working' : 'result', pos: at('bankx', new THREE.Vector3(-0.2, 0, -2.3)) } : null,
-      resolution: step >= 5 ? { mode: step === 5 ? 'listening' : 'result', pos: at('gc', new THREE.Vector3(1.6, 0, 1.3)) } : null,
-    };
     Object.entries(this.mascots).forEach(([id, mascot]) => {
-      const next = plan[id];
-      const duration = reducedMotion ? 0 : 0.7;
-      if (!next) {
-        if (mascot.visible) gsap.to(mascot, { size: 0, duration: duration * 0.6, ease: 'back.in(2)' });
-        mascot.visible = false;
-        return;
-      }
-      mascot.mode = next.mode;
-      mascot.ride = Boolean(next.ride);
-      if (next.pos) {
-        if (!mascot.visible) mascot.group.position.copy(next.pos);
-        else gsap.to(mascot.group.position, { x: next.pos.x, y: next.pos.y, z: next.pos.z, duration: 1.4, ease: 'power3.inOut' });
-      }
-      if (!mascot.visible) gsap.to(mascot, { size: 1, duration, delay: 0.25, ease: 'back.out(2.4)' });
-      mascot.visible = true;
+      const ride = id === 'ghost' && step === 3;
+      if (mascot.ride && !ride) gsap.to(mascot.group.position, { x: mascot.post.x, y: 0, z: mascot.post.z, duration: reducedMotion ? 0 : 1.2, ease: 'power3.inOut' });
+      mascot.ride = ride;
     });
   }
 
@@ -1376,9 +1401,11 @@ export class ServiceMap {
 
   updateMascots(dt, time) {
     Object.values(this.mascots).forEach((mascot) => {
-      const frames = mascot.frames[mascot.mode] || Object.values(mascot.frames)[0];
-      const frame = frames[Math.floor(time / (mascot.mode === 'working' ? 0.42 : 0.7)) % frames.length];
+      const frames = mascot.frames[mascot.mode] || mascot.frames.listening;
+      const period = mascot.mode === 'working' ? 0.42 : mascot.idle ? 1.4 : 0.8;
+      const frame = frames[Math.floor(time / period) % frames.length];
       if (mascot.material.map !== frame) mascot.material.map = frame;
+      const scale = mascot.size * (mascot.active ? 3.4 : 2.6);
       if (mascot.ride) {
         const route = [this.edges.get('~router>~gb'), this.edges.get('~gb>~bankx')];
         const loop = (time * 0.12) % 2;
@@ -1388,12 +1415,17 @@ export class ServiceMap {
         mascot.sprite.position.y = point.y + this.twin.position.y + 0.12;
         mascot.shadow.position.y = TWIN_LIFT + this.twin.position.y - 0.02;
       } else {
-        mascot.sprite.position.y = 0.05 + (mascot.mode === 'result' ? Math.abs(Math.sin(time * 2.4)) * 0.24 : Math.sin(time * 1.8) * 0.06);
+        const hop = mascot.mode === 'result' ? Math.abs(Math.sin(time * 2.4)) * 0.3 : mascot.mode === 'working' ? Math.abs(Math.sin(time * 6)) * 0.08 : Math.sin(time * 1.8) * 0.06;
+        mascot.sprite.position.y = 0.05 + hop;
         mascot.shadow.position.y = 0.02;
       }
-      mascot.sprite.scale.setScalar(Math.max(0.0001, mascot.size * 2.1));
-      mascot.shadow.scale.setScalar(Math.max(0.0001, mascot.size));
+      mascot.material.opacity = mascot.idle ? 0.75 : 1;
+      mascot.sprite.scale.setScalar(Math.max(0.0001, scale));
+      mascot.shadow.scale.setScalar(Math.max(0.0001, mascot.size * (mascot.active ? 1.3 : 1)));
       mascot.shadow.material.opacity = mascot.size * 0.55;
+      mascot.ring.material.opacity = mascot.active && !mascot.ride ? 0.55 + Math.sin(time * 3) * 0.25 : 0;
+      mascot.ring.scale.setScalar(1.1 + Math.sin(time * 3) * 0.08);
+      mascot.bubble.position.y = mascot.sprite.position.y + scale * 0.98;
     });
   }
 }

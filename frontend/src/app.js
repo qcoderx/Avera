@@ -4,6 +4,9 @@ import { ServiceMap, webglAvailable } from './three/serviceMap.js';
 import { bindTilt, leaveView, revealView } from './motion.js';
 import { api, apiBase, auth, openStream } from './api.js';
 import { LiveStore, viewModel, pretty, naira } from './live.js';
+import morphdom from 'morphdom';
+import { AgentDirector, AGENTS } from './agents.js';
+import { createChat } from './chat.js';
 
 const app = document.querySelector('#app');
 const params = new URLSearchParams(window.location.search);
@@ -35,8 +38,19 @@ function isLive() {
   return live.mode === 'live';
 }
 
+// The director paces the displayed step so a burst of backend records still reads as handoffs.
+const director = new AgentDirector();
+
 function currentStep() {
-  return isLive() ? D.step : state.demoStep;
+  return isLive() ? director.displayStep : state.demoStep;
+}
+
+function liveModel() {
+  return isLive() ? viewModel(store, live.routes, director.displayStep) : fixture;
+}
+
+function agentContext() {
+  return { run: isLive() ? store.run : null, obsState: isLive() ? live.health?.observability?.state : null, chatty: !state.loading };
 }
 
 const has3d = webglAvailable();
@@ -153,6 +167,7 @@ function shell(content) {
         <header class="topbar">
           <div class="breadcrumb"><span>Incident command centre</span>${icon('arrow', 14)}<strong>${current[1]}</strong></div>
           <div class="top-actions">
+            <time class="live-clock" data-clock title="Local time">${nowClock()}</time>
             ${connectionPill()}
             <button class="demo-trigger" data-action="demo-panel"><span class="demo-dot"></span><span class="demo-step-no">${String(currentStep() + 1).padStart(2, '0')}</span>${step.label}<kbd>D</kbd></button>
           </div>
@@ -215,8 +230,11 @@ function demoPanel() {
   </aside>`;
 }
 
+let mounted = false;
+
 function render() {
-  D = isLive() ? viewModel(store, live.routes) : fixture;
+  D = liveModel();
+  director.refresh();
   const views = {
     overview: overviewView,
     map: mapView,
@@ -230,8 +248,32 @@ function render() {
     states: statesView,
   };
   const content = state.loading ? loadingView() : views[state.view]();
-  app.innerHTML = shell(content);
-  bindEvents();
+  const html = shell(content);
+  if (!mounted) {
+    app.innerHTML = html;
+    mounted = true;
+  } else {
+    // Patch only what changed, so animations, images and the 3D map keep running.
+    const next = document.createElement('div');
+    next.id = 'app';
+    next.innerHTML = html;
+    morphdom(app, next, {
+      onBeforeElUpdated(from, to) {
+        if (from.hasAttribute('data-map-slot') && from.dataset.mapSlot === to.dataset.mapSlot) return false;
+        if ((from.tagName === 'INPUT' || from.tagName === 'TEXTAREA') && from.type !== 'hidden') return false;
+        if (from.tagName === 'DETAILS' && from.open) to.setAttribute('open', '');
+        if (from.classList.contains('tilt-ready')) {
+          to.classList.add('tilt-ready');
+          to.style.cssText = from.style.cssText;
+        }
+        if (from.hasAttribute('data-counted')) {
+          to.setAttribute('data-counted', '');
+        }
+        return !from.isEqualNode(to);
+      },
+    });
+  }
+  tickClocks();
   const entering = !state.loading && lastView !== state.view;
   mountMap(entering);
   if (!state.loading) {
@@ -239,6 +281,24 @@ function render() {
     if (entering) revealView(document.querySelector('#main-content'));
     bindTilt(app);
   }
+}
+
+// Real wall-clock time: the topbar clock and every "open for" timer tick each second.
+function elapsedSince(iso) {
+  if (!iso) return '—';
+  const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes}m ${String(seconds % 60).padStart(2, '0')}s` : `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
+}
+
+function nowClock() {
+  return new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function tickClocks() {
+  document.querySelectorAll('[data-clock]').forEach((el) => { el.textContent = nowClock(); });
+  document.querySelectorAll('[data-since]').forEach((el) => { el.textContent = `${el.dataset.prefix || ''}${elapsedSince(el.dataset.since)}`; });
 }
 
 let mapSignature = '';
@@ -260,6 +320,7 @@ function mountMap(intro) {
   }
   serviceMap.setTheme(state.theme);
   serviceMap.setData(D);
+  serviceMap.setAgents(director.statuses, Object.fromEntries(AGENTS.map(({ id }) => [id, director.line(id)])));
   const signature = JSON.stringify(mapState());
   serviceMap.setStep(currentStep(), signature !== mapSignature);
   mapSignature = signature;
@@ -281,7 +342,7 @@ function overviewView() {
     ${pageHeader('System health', 'Live operational state across channels, services and active incidents.', `<div class="incident-chip ${healthy ? 'nominal' : ''}"><i></i>${healthy ? D.health.nominalLabel : `${D.incident.severity} · ${D.incident.id}`}</div>`)}
     <section class="overview-theatre" data-reveal>
       <div class="health-stage">
-        <div class="stage-topline"><span>${healthy ? 'Bank-wide availability' : 'Active incident'}</span><time>${healthy ? 'Updated now' : `Open ${D.incident.elapsed}`}</time></div>
+        <div class="stage-topline"><span>${healthy ? 'Bank-wide availability' : 'Active incident'}</span>${healthy ? '<time>Updated now</time>' : isLive() && D.times?.openedAt ? `<time data-since="${D.times.openedAt}" data-prefix="Open for ">Open for ${elapsedSince(D.times.openedAt)}</time>` : `<time>Open ${D.incident.elapsed}</time>`}</div>
         <div class="incident-title">
           <div class="health-orbit ${healthy ? 'healthy' : ''}"><em class="ring r1"><b></b></em><em class="ring r2"><b></b></em><em class="ring r3"><b></b></em><div class="orbit-core"><span><span data-count="${orbitValue}" data-decimals="${healthy ? 2 : 0}">${orbitValue}</span><small>%</small></span></div></div>
           <div><h2>${healthy ? D.health.nominalLabel : D.incident.title}</h2><p>${healthy ? (isLive() && !store.run.started ? 'The simulated bank is idle. Open the demo controls (D) to start a healthy baseline.' : 'Synthetic traffic is flowing normally across every monitored route.') : 'Avera connected customer reports, retries, channel switching and route-level timeouts into one incident.'}</p></div>
@@ -317,7 +378,7 @@ function overviewView() {
     </section>
     <section class="agent-dock" data-reveal>
       <div class="dock-copy"><span>Agent activity</span><p>Four accountable agents. Every handoff carries evidence.</p></div>
-      ${D.agents.map((agent) => `<button class="agent-mini" data-view="states" data-tilt="7" style="--agent:${agent.color}">${agentImage(agent.status, agent.id, `${agent.name} agent`)}<div><span>${agent.name}</span><strong>${agent.state}</strong><small>${agent.detail}</small></div></button>`).join('')}
+      ${D.agents.map((agent) => { const status = director.statuses?.[agent.id]; const mode = { working: 'working', done: 'result' }[status?.mode] || 'listening'; return `<button class="agent-mini ${status?.active ? 'on-point' : ''} mode-${status?.mode || 'idle'}" data-action="open-chat" style="--agent:${agent.color}">${agentImage(mode, agent.id, `${agent.name} agent`)}<div><span>${agent.name} · ${status?.headline || agent.state}</span><strong>${director.line(agent.id) || agent.state}</strong><small>${status?.active ? 'On point now · ask me in the agent channel' : agent.detail}</small></div></button>`; }).join('')}
     </section>`;
 }
 
@@ -381,7 +442,6 @@ function updateNodeCard() {
   if (!card) return;
   card.innerHTML = nodeCard();
   card.classList.toggle('open', Boolean(state.selectedNode));
-  card.querySelector('[data-map-action="reset"]')?.addEventListener('click', () => serviceMap?.resetView());
 }
 
 function mapView() {
@@ -968,55 +1028,71 @@ function exportAuditTrail() {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// One delegated listener per event type: elements survive DOM patching, so per-render
+// listeners would pile up.
 function bindEvents() {
-  document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigate(button.dataset.view)));
-  document.querySelectorAll('[data-approval]').forEach((button) => button.addEventListener('click', () => { state.activeApproval = button.dataset.approval; state.tokenFormRole = null; render(); }));
-  document.querySelectorAll('[data-decision]').forEach((button) => button.addEventListener('click', () => decide(button.dataset.decision)));
-  document.querySelectorAll('[data-step]').forEach((button) => button.addEventListener('click', () => setStep(Number(button.dataset.step))));
-  document.querySelectorAll('[data-live]').forEach((button) => button.addEventListener('click', () => liveAction(button.dataset.live, button)));
-  document.querySelectorAll('[data-auth]').forEach((button) => button.addEventListener('click', () => authAction(button.dataset.auth, button.dataset.role)));
-  document.querySelector('[data-token-form]')?.addEventListener('submit', (event) => {
-    event.preventDefault();
-    try {
-      const session = auth.set(new FormData(event.target).get('token'));
-      state.tokenFormRole = null;
-      showToast(`Token accepted for ${session.sub} (${pretty(session.role)}).`);
-      render();
-    } catch (error) {
-      showToast(error.message, 'bad');
+  app.addEventListener('click', (event) => {
+    const hit = (selector) => event.target.closest(selector);
+    let el;
+    if ((el = hit('[data-view]'))) return navigate(el.dataset.view);
+    if ((el = hit('[data-approval]'))) { state.activeApproval = el.dataset.approval; state.tokenFormRole = null; return render(); }
+    if ((el = hit('[data-decision]'))) return decide(el.dataset.decision);
+    if ((el = hit('[data-step]'))) return setStep(Number(el.dataset.step));
+    if ((el = hit('[data-live]'))) return liveAction(el.dataset.live, el);
+    if ((el = hit('[data-auth]'))) return authAction(el.dataset.auth, el.dataset.role);
+    if ((el = hit('[data-map-action]'))) {
+      const action = el.dataset.mapAction;
+      if (action === 'focus') return serviceMap?.focusSuspect();
+      if (action === 'fullscreen') return setMapFullscreen(!state.mapFullscreen);
+      if (action === 'reset') return serviceMap?.resetView();
+    }
+    if (!(el = hit('[data-action]'))) return undefined;
+    const action = el.dataset.action;
+    if (action === 'reconnect') return connect();
+    if (action === 'export') return exportAuditTrail();
+    if (action === 'open-chat') return chat.open();
+    if (action === 'dismiss-console') { state.consoleResult = null; return render(); }
+    if (action === 'demo-panel') return setDemoOpen(el.closest('.demo-panel') ? false : !state.demoOpen);
+    if (action === 'play') return togglePlay(Boolean(el.closest('.demo-panel')));
+    if (action === 'next') return setStep(state.demoStep + 1);
+    if (action === 'reset' && el.closest('.demo-panel')) { state.playing = false; clearInterval(playTimer); return setStep(0); }
+    if (action === 'theme') { state.theme = state.theme === 'light' ? 'dark' : 'light'; return render(); }
+    return undefined;
+  });
+
+  app.addEventListener('submit', (event) => {
+    const form = event.target;
+    if (form.matches('[data-token-form]')) {
+      event.preventDefault();
+      try {
+        const session = auth.set(new FormData(form).get('token'));
+        state.tokenFormRole = null;
+        showToast(`Token accepted for ${session.sub} (${pretty(session.role)}).`);
+        form.reset();
+        document.activeElement?.blur();
+        render();
+      } catch (error) {
+        showToast(error.message, 'bad');
+      }
+    }
+    if (form.matches('[data-complaint-form]')) {
+      event.preventDefault();
+      const text = String(new FormData(form).get('text') || '').trim();
+      if (!text) return;
+      form.reset();
+      document.activeElement?.blur();
+      runBusy('complaint', async () => {
+        await api.ingest('command-centre', 'complaint', { id: `cmp-ui-${Date.now()}`, ts: new Date().toISOString(), channel: 'support', raw_text: text });
+        showToast('Customer report sent. Avera is re-investigating.');
+      });
     }
   });
-  document.querySelector('[data-complaint-form]')?.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const text = new FormData(event.target).get('text').trim();
-    if (!text) return;
-    runBusy('complaint', async () => {
-      const now = new Date().toISOString();
-      await api.ingest('command-centre', 'complaint', { id: `cmp-ui-${Date.now()}`, ts: now, channel: 'support', raw_text: text });
-      showToast('Customer report sent. Avera is re-investigating.');
-    });
-  });
-  document.querySelectorAll('[data-action="reconnect"]').forEach((button) => button.addEventListener('click', () => connect()));
-  document.querySelector('[data-action="export"]')?.addEventListener('click', exportAuditTrail);
-  document.querySelector('[data-action="dismiss-console"]')?.addEventListener('click', () => { state.consoleResult = null; render(); });
-  document.querySelector('.topbar [data-action="demo-panel"]')?.addEventListener('click', () => setDemoOpen(!state.demoOpen));
-  document.querySelector('.demo-panel [data-action="demo-panel"]')?.addEventListener('click', () => setDemoOpen(false));
-  document.querySelectorAll('[data-action="play"]').forEach((button) => button.addEventListener('click', () => togglePlay(Boolean(button.closest('.demo-panel')))));
-  document.querySelector('[data-action="next"]')?.addEventListener('click', () => setStep(state.demoStep + 1));
-  document.querySelector('.demo-panel [data-action="reset"]')?.addEventListener('click', () => { state.playing = false; clearInterval(playTimer); setStep(0); });
-  document.querySelector('[data-action="theme"]')?.addEventListener('click', () => { state.theme = state.theme === 'light' ? 'dark' : 'light'; render(); });
-  document.querySelector('[data-map-action="focus"]')?.addEventListener('click', () => serviceMap?.focusSuspect());
-  document.querySelector('[data-map-action="fullscreen"]')?.addEventListener('click', () => setMapFullscreen(!state.mapFullscreen));
-  document.querySelectorAll('[data-map-action="reset"]').forEach((button) => button.addEventListener('click', () => serviceMap?.resetView()));
-  document.querySelector('#memory-query')?.addEventListener('input', (event) => {
+
+  app.addEventListener('input', (event) => {
+    if (event.target.id !== 'memory-query') return;
     state.memoryQuery = event.target.value;
     window.clearTimeout(event.target._timer);
-    event.target._timer = window.setTimeout(() => {
-      render();
-      const input = document.querySelector('#memory-query');
-      input?.focus();
-      input?.setSelectionRange(input.value.length, input.value.length);
-    }, 180);
+    event.target._timer = window.setTimeout(() => render(), 180);
   });
 }
 
@@ -1033,10 +1109,7 @@ function setMapFullscreen(on) {
   if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
   if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
   const button = document.querySelector('[data-map-action="fullscreen"]');
-  if (button) {
-    button.outerHTML = fullscreenButton();
-    document.querySelector('[data-map-action="fullscreen"]').addEventListener('click', () => setMapFullscreen(!state.mapFullscreen));
-  }
+  if (button) button.outerHTML = fullscreenButton();
 }
 
 document.addEventListener('fullscreenchange', () => {
@@ -1051,29 +1124,36 @@ document.addEventListener('keydown', (event) => {
   if (key === 'escape' && state.mapFullscreen) setMapFullscreen(false);
 });
 
-// Live updates re-render at most every 250 ms, and wait while someone is typing.
-let deferredRender = false;
-
+// Live updates patch the page at most every 250 ms; typed input is preserved by the DOM patcher.
 function liveRender() {
-  if (state.loading) return;
-  const typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
-  if (typing || navigating) {
-    deferredRender = true;
-    return;
-  }
+  if (state.loading || navigating) return;
   render();
 }
 
-document.addEventListener('focusout', () => {
-  if (!deferredRender) return;
-  window.setTimeout(() => {
-    if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
-    deferredRender = false;
-    render();
-  }, 0);
+store.subscribe(() => {
+  lastRecordAt = Date.now();
+  liveRender();
 });
 
-store.subscribe(liveRender);
+// Initial history replays instantly; once the stream goes quiet, show the current state
+// directly. After that, new progress is paced through visible handoffs.
+let lastRecordAt = 0;
+let streamOpenedAt = 0;
+window.setInterval(() => {
+  if (!isLive() || director.synced || !streamOpenedAt) return;
+  const quietFor = Date.now() - Math.max(lastRecordAt, streamOpenedAt);
+  if (quietFor > 900) {
+    director.sync(store.step());
+    render();
+  }
+}, 300);
+
+director.start(() => ({ D: liveModel(), step: isLive() ? store.step() : state.demoStep, ctx: agentContext(), paced: isLive() }));
+director.subscribe((kind) => {
+  if (kind === 'step' || kind === 'beat') liveRender();
+});
+const chat = createChat({ director, context: () => ({ D: liveModel(), step: currentStep(), ctx: agentContext() }) });
+window.setInterval(tickClocks, 1000);
 
 async function refreshHealth() {
   try {
@@ -1104,20 +1184,26 @@ async function connect() {
   live.closeStream = openStream({
     after: store.lastSequence,
     onRecord: (record) => store.ingest(record),
-    onOpen: () => { live.stream = 'open'; liveRender(); },
+    onOpen: () => { live.stream = 'open'; streamOpenedAt ||= Date.now(); liveRender(); },
     onError: () => { live.stream = 'reconnecting'; liveRender(); },
   });
   liveRender();
 }
 
-// Health and routes change on their own (reroutes, outbox, model state), so poll them gently.
+// Health and routes change on their own (reroutes, model state). Poll every 3 s while an
+// incident is moving so the agents report the backend's real investigation state, else every 9 s.
+let healthTicks = 0;
 window.setInterval(async () => {
+  healthTicks += 1;
   if (!isLive() || document.hidden) return;
+  const active = store.run.started && store.step() < 6;
+  if (!active && healthTicks % 3 !== 0) return;
   const before = JSON.stringify([live.health?.observability, live.health?.remediation, live.routes]);
   await refreshHealth();
   if (before !== JSON.stringify([live.health?.observability, live.health?.remediation, live.routes])) liveRender();
-}, 8000);
+}, 3000);
 
+bindEvents();
 render();
 connect();
 window.setTimeout(() => {

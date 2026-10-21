@@ -296,9 +296,9 @@ function hypothesisState(test) {
 }
 
 // Build the fixture-shaped view model from the live run.
-export function viewModel(store, routes) {
+export function viewModel(store, routes, displayStep) {
   const run = store.run;
-  const step = store.step();
+  const step = displayStep ?? store.step();
   const base = fixture;
   const sc = (service, code) => run.serviceCodes[`${service}:${code}`] || 0;
   const approvals = run.incident ? [...run.approvals.values()].filter((item) => item.payload?.incident_id === run.incident.id) : [];
@@ -487,6 +487,7 @@ export function viewModel(store, routes) {
     sms: sms?.payload?.message || '',
     timeline,
     demoSteps,
+    times: { failure: clock(m.failure, false), release: clock(run.release?.ts, false), openedAt: run.incident?.openedAt || null, firstSignalAt: m.failure || m.complaint || null },
     mapStates: liveMapStates({ step, hypotheses, blast, complained, affected, silent, routes, run, applied, config, failing }),
   };
 }
