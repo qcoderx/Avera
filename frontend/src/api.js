@@ -1,8 +1,7 @@
 // Client for the Avera API (see backend/avera/API_CONTRACT.md).
-// In development the Vite server proxies /api to the backend; a deployed build can
-// point straight at the API with VITE_AVERA_API_BASE.
-
-const BASE = (import.meta.env.VITE_AVERA_API_BASE || '/api').replace(/\/$/, '');
+// API traffic stays same-origin and is forwarded by Vite in development and by
+// the Vercel rewrite in production. This avoids exposing the backend to browser CORS.
+const BASE = '/api';
 const TOKEN_KEY = 'avera.approver-tokens';
 
 export class ApiError extends Error {
