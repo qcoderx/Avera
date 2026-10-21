@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import jwt
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
@@ -236,6 +237,17 @@ def create_app(
         description="Typed event ingestion and ordered, replayable incident streams.",
         lifespan=lifespan,
     )
+    # Browsers on other origins are blocked unless explicitly allowlisted; local development
+    # uses the same-origin Vite proxy instead.
+    cors_origins = [origin.strip() for origin in os.getenv("AVERA_CORS_ORIGINS", "").split(",") if origin.strip()]
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Authorization", "Content-Type", "Last-Event-ID"],
+            expose_headers=["X-Avera-Sequence", "X-Avera-Delivery"],
+        )
     app.state.event_service = service
     app.state.operational_logs = operational_logs
     app.state.event_repository = repository

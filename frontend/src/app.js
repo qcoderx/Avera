@@ -2,6 +2,12 @@ import './styles.css';
 import { fixture } from './fixtures.js';
 import { ServiceMap, webglAvailable } from './three/serviceMap.js';
 import { bindTilt, leaveView, revealView } from './motion.js';
+import { api, apiBase, auth, openStream } from './api.js';
+import { LiveStore, viewModel, pretty, naira } from './live.js';
+import morphdom from 'morphdom';
+import { AgentDirector, AGENTS } from './agents.js';
+import { createChat } from './chat.js';
+import { claimHtml } from './prose.js';
 
 const app = document.querySelector('#app');
 const params = new URLSearchParams(window.location.search);
@@ -18,7 +24,35 @@ const state = {
   memoryQuery: '',
   selectedNode: null,
   mapFullscreen: false,
+  busy: null,
+  tokenFormRole: null,
+  consoleResult: null,
+  remediation: null,
 };
+
+// Live connection: the API is the source of truth; the recorded fixture is the offline fallback.
+const store = new LiveStore();
+const live = { mode: params.get('mode') === 'fixture' ? 'fixture' : 'connecting', stream: 'closed', health: null, routes: null, error: null, closeStream: null, retry: null };
+let D = fixture;
+
+function isLive() {
+  return live.mode === 'live';
+}
+
+// The director paces the displayed step so a burst of backend records still reads as handoffs.
+const director = new AgentDirector();
+
+function currentStep() {
+  return isLive() ? director.displayStep : state.demoStep;
+}
+
+function liveModel() {
+  return isLive() ? viewModel(store, live.routes, director.displayStep) : fixture;
+}
+
+function agentContext() {
+  return { run: isLive() ? store.run : null, obsState: isLive() ? live.health?.observability?.state : null, chatty: !state.loading };
+}
 
 const has3d = webglAvailable();
 let serviceMap = null;
@@ -35,7 +69,7 @@ const statusLabels = {
 };
 
 function mapState() {
-  return fixture.mapStates[state.demoStep];
+  return D.mapStates[currentStep()];
 }
 
 function nodeStatus(id) {
@@ -87,7 +121,7 @@ function formatNumber(value) {
   return new Intl.NumberFormat('en-NG').format(value);
 }
 
-function sparkline(values, width = 430, height = 96) {
+function sparkline(values, failureAt = 0.68, width = 430, height = 96) {
   const max = Math.max(...values);
   const min = Math.min(...values);
   const points = values.map((value, index) => {
@@ -95,7 +129,8 @@ function sparkline(values, width = 430, height = 96) {
     const y = height - ((value - min) / (max - min || 1)) * (height - 10) - 5;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
-  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Transaction throughput trend"><polygon points="0,${height} ${points} ${width},${height}" fill="var(--teal-pale)"/><polyline points="${points}" fill="none" stroke="var(--teal)" stroke-width="2" vector-effect="non-scaling-stroke"/><line x1="68%" y1="0" x2="68%" y2="${height}" stroke="var(--coral)" stroke-dasharray="4 5"/><circle cx="68%" cy="67" r="4" fill="var(--coral)" stroke="var(--paper)" stroke-width="3"/></svg>`;
+  const marker = failureAt == null ? '' : `<line x1="${(failureAt * 100).toFixed(1)}%" y1="0" x2="${(failureAt * 100).toFixed(1)}%" y2="${height}" stroke="var(--coral)" stroke-dasharray="4 5"/><circle cx="${(failureAt * 100).toFixed(1)}%" cy="67" r="4" fill="var(--coral)" stroke="var(--paper)" stroke-width="3"/>`;
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Transaction throughput trend"><polygon points="0,${height} ${points} ${width},${height}" fill="var(--teal-pale)"/><polyline points="${points}" fill="none" stroke="var(--teal)" stroke-width="2" vector-effect="non-scaling-stroke"/>${marker}</svg>`;
 }
 
 function logo() {
@@ -116,13 +151,13 @@ function agentImage(mode = 'listening', agent = 'observability', alt = '') {
 
 function shell(content) {
   const current = navItems.find(([id]) => id === state.view) || navItems[0];
-  const step = fixture.demoSteps[state.demoStep];
+  const step = D.demoSteps[currentStep()];
   return `
     <div class="app-shell" data-theme="${state.theme}">
       <aside class="sidebar">
         ${logo()}
         <nav class="primary-nav" aria-label="Primary navigation">
-          ${navItems.map(([id, label, glyph, description]) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}" aria-label="${label}" aria-describedby="nav-tip-${id}" aria-current="${state.view === id ? 'page' : 'false'}">${icon(glyph)}<span class="nav-tooltip" id="nav-tip-${id}" role="tooltip"><strong>${label}</strong><small>${description}</small></span>${id === 'approvals' ? `<em>${pendingCount()}</em>` : ''}</button>`).join('')}
+          ${navItems.map(([id, label, glyph, description]) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}" aria-label="${label}" aria-describedby="nav-tip-${id}" aria-current="${state.view === id ? 'page' : 'false'}">${icon(glyph)}<span class="nav-tooltip" id="nav-tip-${id}" role="tooltip"><strong>${label}</strong><small>${description}</small></span>${id === 'approvals' && pendingCount() ? `<em>${pendingCount()}</em>` : ''}</button>`).join('')}
         </nav>
         <div class="sidebar-foot">
           <button class="nav-item" data-action="theme" aria-label="Toggle color theme" aria-describedby="nav-tip-display">${icon('sun')}<span class="nav-tooltip" id="nav-tip-display" role="tooltip"><strong>Display</strong><small>Switch between light and dark mode.</small></span></button>
@@ -133,18 +168,28 @@ function shell(content) {
         <header class="topbar">
           <div class="breadcrumb"><span>Incident command centre</span>${icon('arrow', 14)}<strong>${current[1]}</strong></div>
           <div class="top-actions">
-            <div class="stream-status"><i></i> Fixture stream <span>live</span></div>
-            <button class="demo-trigger" data-action="demo-panel"><span class="demo-dot"></span><span class="demo-step-no">${String(state.demoStep + 1).padStart(2, '0')}</span>${step.label}<kbd>D</kbd></button>
+            <time class="live-clock" data-clock title="Local time">${nowClock()}</time>
+            ${connectionPill()}
+            <button class="demo-trigger" data-action="demo-panel"><span class="demo-dot"></span><span class="demo-step-no">${String(currentStep() + 1).padStart(2, '0')}</span>${step.label}<kbd>D</kbd></button>
           </div>
         </header>
         <main class="main-content view-${state.view} ${state.loading ? 'is-loading' : ''}" id="main-content">${content}</main>
       </div>
       ${demoPanel()}
-      <div class="toast-region" aria-live="polite"></div>
     </div>`;
 }
 
+function connectionPill() {
+  if (isLive()) {
+    const ok = live.stream === 'open';
+    return `<div class="stream-status ${ok ? '' : 'warn'}" title="${apiBase}"><i></i> Live API <span>${ok ? 'streaming' : 'reconnecting'}</span></div>`;
+  }
+  if (live.mode === 'connecting') return '<div class="stream-status warn"><i></i> Connecting <span>API</span></div>';
+  return `<button class="stream-status offline" data-action="reconnect" title="${live.error || ''}"><i></i> Recorded fixture <span>retry live</span></button>`;
+}
+
 function pendingCount() {
+  if (isLive()) return D.approvals.filter((item) => item.status === 'pending').length;
   return Object.values(state.approvals).filter((status) => status === 'pending').length;
 }
 
@@ -153,16 +198,44 @@ function pageHeader(title, description, extra = '') {
 }
 
 function demoPanel() {
-  const step = fixture.demoSteps[state.demoStep];
+  const step = D.demoSteps[currentStep()];
+  if (isLive()) {
+    const h = live.health;
+    const busy = (key) => (state.busy === key ? 'disabled aria-busy="true"' : state.busy ? 'disabled' : '');
+    return `<aside class="demo-panel ${state.demoOpen ? 'open' : ''}" aria-label="Demo controller">
+      <div class="demo-panel-head"><div><span>Live demo · ${apiBase}</span><strong>${step.title}</strong></div><button data-action="demo-panel" aria-label="Close demo controller">${icon('close')}</button></div>
+      <div class="demo-track live">${D.demoSteps.map((item, index) => `<div class="demo-stage ${index <= currentStep() ? 'complete' : ''} ${index === currentStep() ? 'current' : ''}"><i>${index + 1}</i><span>${item.label}</span></div>`).join('')}</div>
+      <div class="demo-transport live">
+        <button data-live="start" ${busy('start')}>${icon('play')} Start baseline</button>
+        <button class="transport-primary" data-live="inject" ${busy('inject')}>${icon('spark')} Inject failure</button>
+        <button data-live="reset" ${busy('reset')}>${icon('reset')} Reset</button>
+      </div>
+      <div class="demo-transport live secondary">
+        <button data-live="investigate" ${busy('investigate')}>${icon('search')} Investigate now</button>
+        <button data-live="replay" ${busy('replay')}>${icon('clock')} Replay recorded stream</button>
+      </div>
+      <dl class="health-grid">
+        <div><dt>Observability</dt><dd class="${h?.observability?.state === 'degraded' ? 'bad' : ''}">${h?.observability?.state || '—'}${h?.observability?.model_configured === false ? ' · no model' : ''}</dd></div>
+        <div><dt>Storage · bus</dt><dd>${h ? `${h.storage} · ${h.event_bus}` : '—'}</dd></div>
+        <div><dt>Records streamed</dt><dd>${store.lastSequence.toLocaleString('en-NG')}</dd></div>
+        <div><dt>Outbox pending</dt><dd>${h?.outbox_pending ?? '—'}</dd></div>
+      </dl>
+      ${h?.observability?.errors?.length ? `<p class="health-error">${h.observability.errors.join(', ')}</p>` : ''}
+    </aside>`;
+  }
   return `<aside class="demo-panel ${state.demoOpen ? 'open' : ''}" aria-label="Demo controller">
     <div class="demo-panel-head"><div><span>Fixture replay</span><strong>${step.title}</strong></div><button data-action="demo-panel" aria-label="Close demo controller">${icon('close')}</button></div>
     <div class="demo-track">${fixture.demoSteps.map((item, index) => `<button class="demo-stage ${index <= state.demoStep ? 'complete' : ''} ${index === state.demoStep ? 'current' : ''}" data-step="${index}"><i>${index + 1}</i><span>${item.label}</span></button>`).join('')}</div>
     <div class="demo-transport"><button data-action="reset">${icon('reset')} Reset</button><button class="transport-primary" data-action="play">${icon(state.playing ? 'pause' : 'play')} ${state.playing ? 'Pause' : 'Play sequence'}</button><button data-action="next">Next ${icon('arrow')}</button></div>
-    <p>Uses the recorded incident stream. Switch to <code>live</code> with one environment setting when the backend is ready.</p>
+    <p>${live.mode === 'connecting' ? 'Connecting to the live API…' : `The live API at <code>${apiBase}</code> is unreachable${live.error ? ` (${live.error})` : ''}, so this is the recorded incident. <button class="text-button inline" data-action="reconnect">Retry live</button>`}</p>
   </aside>`;
 }
 
+let mounted = false;
+
 function render() {
+  D = liveModel();
+  director.refresh();
   const views = {
     overview: overviewView,
     map: mapView,
@@ -176,8 +249,34 @@ function render() {
     states: statesView,
   };
   const content = state.loading ? loadingView() : views[state.view]();
-  app.innerHTML = shell(content);
-  bindEvents();
+  const html = shell(content);
+  document.documentElement.dataset.screen = state.view;
+  if (!mounted) {
+    app.innerHTML = html;
+    mounted = true;
+  } else {
+    // Patch only what changed, so animations, images and the 3D map keep running.
+    const next = document.createElement('div');
+    next.id = 'app';
+    next.innerHTML = html;
+    morphdom(app, next, {
+      onBeforeElUpdated(from, to) {
+        if (from.hasAttribute('data-map-slot') && from.dataset.mapSlot === to.dataset.mapSlot) return false;
+        if ((from.tagName === 'INPUT' || from.tagName === 'TEXTAREA') && from.type !== 'hidden') return false;
+        if (from.tagName === 'DETAILS' && from.open) to.setAttribute('open', '');
+        if (from.classList.contains('tilt-ready')) {
+          to.classList.add('tilt-ready');
+          to.style.cssText = from.style.cssText;
+        }
+        if (from.hasAttribute('data-counted')) {
+          to.setAttribute('data-counted', '');
+        }
+        return !from.isEqualNode(to);
+      },
+    });
+  }
+  tickClocks();
+  drawApprovalPrompt();
   const entering = !state.loading && lastView !== state.view;
   mountMap(entering);
   if (!state.loading) {
@@ -186,6 +285,26 @@ function render() {
     bindTilt(app);
   }
 }
+
+// Real wall-clock time: the topbar clock and every "open for" timer tick each second.
+function elapsedSince(iso) {
+  if (!iso) return '—';
+  const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes}m ${String(seconds % 60).padStart(2, '0')}s` : `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
+}
+
+function nowClock() {
+  return new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function tickClocks() {
+  document.querySelectorAll('[data-clock]').forEach((el) => { el.textContent = nowClock(); });
+  document.querySelectorAll('[data-since]').forEach((el) => { el.textContent = `${el.dataset.prefix || ''}${elapsedSince(el.dataset.since)}`; });
+}
+
+let mapSignature = '';
 
 function mountMap(intro) {
   const slot = document.querySelector('[data-map-slot]');
@@ -203,37 +322,49 @@ function mountMap(intro) {
     });
   }
   serviceMap.setTheme(state.theme);
-  serviceMap.setStep(state.demoStep);
+  serviceMap.setData(D);
+  serviceMap.setAgents(director.statuses, Object.fromEntries(AGENTS.map(({ id }) => [id, director.line(id)])));
+  const signature = JSON.stringify(mapState());
+  serviceMap.setStep(currentStep(), signature !== mapSignature);
+  mapSignature = signature;
   serviceMap.mount(slot, { mode: slot.dataset.mapSlot, intro });
 }
 
 function overviewView() {
-  const step = fixture.demoSteps[state.demoStep];
-  const healthy = state.demoStep < 2;
+  const step = D.demoSteps[currentStep()];
+  const healthy = currentStep() < 1 || (!isLive() && currentStep() < 2);
+  const top = D.hypotheses.find((item) => item.state === 'validated') || D.hypotheses[0];
+  const orbitValue = healthy ? (isLive() ? Math.min(...D.health.services.map((item) => item.value)) : 99.98) : top?.confidence ?? 0;
+  const firstSignal = isLive() ? D.incident.firstSignal : '10:42:08';
+  const detected = isLive() ? D.incident.detected : '9m 12s';
+  const validated = top?.state === 'validated' && currentStep() >= 3 ? `${top.confidence}%` : currentStep() >= 2 ? 'Testing' : '—';
+  const containment = currentStep() >= 4 && D.fixPlan ? D.fixPlan.containmentEta : currentStep() >= 2 ? 'Calculating' : '—';
+  const transfers = isLive() ? `${formatNumber(D.health.transferCount || 0)} <small>transfers</small>` : '2,841 <small>txn/min</small>';
+  const signals = isLive() ? D.signals : D.signals.slice(0, currentStep() < 2 ? 2 : 7);
   return `
-    ${pageHeader('System health', 'Live operational state across channels, services and active incidents.', `<div class="incident-chip ${healthy ? 'nominal' : ''}"><i></i>${healthy ? fixture.health.nominalLabel : `${fixture.incident.severity} · ${fixture.incident.id}`}</div>`)}
+    ${pageHeader('System health', 'Live operational state across channels, services and active incidents.', `<div class="incident-chip ${healthy ? 'nominal' : ''}"><i></i>${healthy ? D.health.nominalLabel : `${D.incident.severity} · ${D.incident.id}`}</div>`)}
     <section class="overview-theatre" data-reveal>
       <div class="health-stage">
-        <div class="stage-topline"><span>${healthy ? 'Bank-wide availability' : 'Active incident'}</span><time>${healthy ? 'Updated now' : `Open ${fixture.incident.elapsed}`}</time></div>
+        <div class="stage-topline"><span>${healthy ? 'Bank-wide availability' : 'Active incident'}</span>${healthy ? '<time>Updated now</time>' : isLive() && D.times?.openedAt ? `<time data-since="${D.times.openedAt}" data-prefix="Open for ">Open for ${elapsedSince(D.times.openedAt)}</time>` : `<time>Open ${D.incident.elapsed}</time>`}</div>
         <div class="incident-title">
-          <div class="health-orbit ${healthy ? 'healthy' : ''}"><em class="ring r1"><b></b></em><em class="ring r2"><b></b></em><em class="ring r3"><b></b></em><div class="orbit-core"><span>${healthy ? '<span data-count="99.98" data-decimals="2">99.98</span>' : `<span data-count="${fixture.hypotheses[0].confidence}">${fixture.hypotheses[0].confidence}</span>`}<small>%</small></span></div></div>
-          <div><h2>${healthy ? fixture.health.nominalLabel : fixture.incident.title}</h2><p>${healthy ? 'Synthetic traffic is flowing normally across every monitored route.' : 'Avera connected customer reports, retries, channel switching and route-level timeouts into one incident.'}</p></div>
+          <div class="health-orbit ${healthy ? 'healthy' : ''}"><em class="ring r1"><b></b></em><em class="ring r2"><b></b></em><em class="ring r3"><b></b></em><div class="orbit-core"><span><span data-count="${orbitValue}" data-decimals="${healthy ? 2 : 0}">${orbitValue}</span><small>%</small></span></div></div>
+          <div><h2>${healthy ? D.health.nominalLabel : D.incident.title}</h2><p>${healthy ? (isLive() && !store.run.started ? 'The simulated bank is idle. Open the demo controls (D) to start a healthy baseline.' : 'Synthetic traffic is flowing normally across every monitored route.') : 'Avera connected customer reports, retries, channel switching and route-level timeouts into one incident.'}</p></div>
         </div>
         <div class="stage-metrics">
-          <div><span>First signal</span><strong>10:42:08</strong></div>
-          <div><span>Detected</span><strong>9m 12s</strong></div>
-          <div><span>Validated cause</span><strong>${state.demoStep >= 4 ? '96%' : 'Testing'}</strong></div>
-          <div><span>Est. containment</span><strong>${state.demoStep >= 5 ? fixture.fixPlan.containmentEta : 'Calculating'}</strong></div>
+          <div><span>First signal</span><strong>${firstSignal}</strong></div>
+          <div><span>Detected in</span><strong>${detected}</strong></div>
+          <div><span>Validated cause</span><strong>${validated}</strong></div>
+          <div><span>Est. containment</span><strong>${containment}</strong></div>
         </div>
         <div class="throughput">
-          <div class="chart-label"><span>Transaction throughput</span><strong>2,841 <small>txn/min</small></strong></div>
-          ${sparkline(fixture.health.throughput)}
-          <span class="failure-marker">Failure begins</span>
+          <div class="chart-label"><span>Transaction throughput</span><strong>${transfers}</strong></div>
+          ${sparkline(D.health.throughput, isLive() ? D.health.failureAt : 0.68)}
+          ${!isLive() || D.health.failureAt != null ? `<span class="failure-marker" style="left:${((isLive() ? D.health.failureAt : 0.64) * 100).toFixed(1)}%">Failure begins</span>` : ''}
         </div>
       </div>
       <aside class="signal-rail">
-        <div class="rail-head"><span>Live incident feed</span><i>Streaming</i></div>
-        <div class="signal-list" data-stagger>${fixture.signals.slice(0, state.demoStep < 2 ? 2 : 7).reverse().map((signal, index) => `<article class="signal ${index === 0 ? 'latest' : ''}"><time>${signal.time}</time><i class="tone-${signal.tone}"></i><div><span>${signal.channel}</span><p>${signal.text}</p></div></article>`).join('')}</div>
+        <div class="rail-head"><span>Live incident feed</span><i>${isLive() ? (live.stream === 'open' ? 'Streaming' : 'Reconnecting') : 'Recorded'}</i></div>
+        <div class="signal-list" data-stagger>${signals.slice().reverse().map((signal, index) => `<article class="signal ${index === 0 ? 'latest' : ''}"><time>${signal.time}</time><i class="tone-${signal.tone}"></i><div><span>${signal.channel}</span><p>${signal.text}</p></div></article>`).join('')}</div>
         <button class="text-button" data-view="timeline">Open incident timeline ${icon('arrow', 16)}</button>
       </aside>
     </section>
@@ -246,11 +377,11 @@ function overviewView() {
       ${has3d ? '<div class="map3d-slot" data-map-slot="compact"></div>' : `<div class="topology compact">${flatTopology()}</div>`}
     </section>
     <section class="service-strip" aria-label="Service health" data-reveal data-stagger>
-      ${fixture.health.services.map((service) => `<div class="service-reading"><i class="${service.state}"></i><span>${service.name}</span><strong>${service.value}%</strong><small>${service.delta}</small></div>`).join('')}
+      ${D.health.services.map((service) => `<div class="service-reading"><i class="${service.state}"></i><span>${service.name}</span><strong>${service.value}%</strong><small>${service.delta}</small></div>`).join('')}
     </section>
     <section class="agent-dock" data-reveal>
       <div class="dock-copy"><span>Agent activity</span><p>Four accountable agents. Every handoff carries evidence.</p></div>
-      ${fixture.agents.map((agent) => `<button class="agent-mini" data-view="states" data-tilt="7" style="--agent:${agent.color}">${agentImage(agent.status, agent.id, `${agent.name} agent`)}<div><span>${agent.name}</span><strong>${agent.state}</strong><small>${agent.detail}</small></div></button>`).join('')}
+      ${D.agents.map((agent) => { const status = director.statuses?.[agent.id]; const mode = { working: 'working', done: 'result' }[status?.mode] || 'listening'; return `<button class="agent-mini ${status?.active ? 'on-point' : ''} mode-${status?.mode || 'idle'}" data-action="open-chat" style="--agent:${agent.color}">${agentImage(mode, agent.id, `${agent.name} agent`)}<div><span>${agent.name} · ${status?.headline || agent.state}</span><strong>${director.line(agent.id) || agent.state}</strong><small>${status?.active ? 'On point now · ask me in the agent channel' : agent.detail}</small></div></button>`; }).join('')}
     </section>`;
 }
 
@@ -275,12 +406,12 @@ function agentForLabel(label) {
 
 function crowdCard() {
   const map = mapState();
-  const { affected, complained, transactions, exposure } = fixture.impact;
+  const { affected, complained, transactions, exposure, silent } = D.impact;
   const found = map.customers.affected >= 1 || map.customers.notified;
   const facts = [
-    ['Customers sending to Bank X', formatNumber(affected)],
-    ['Complained', found ? formatNumber(complained) : map.customers.complainers ? 'Arriving' : 'None yet'],
-    ['Never complained', found ? formatNumber(affected - complained) : 'Not yet known'],
+    ['Customers affected', found ? formatNumber(affected) : 'Not yet known'],
+    ['Complained', isLive() ? formatNumber(complained) : found ? formatNumber(complained) : map.customers.complainers ? 'Arriving' : 'None yet'],
+    ['Never complained', found ? formatNumber(isLive() ? silent : affected - complained) : 'Not yet known'],
     ['Affected transactions', found ? formatNumber(transactions) : 'Counting'],
     ['Estimated exposure', found ? exposure : 'Counting'],
   ];
@@ -292,20 +423,20 @@ function crowdCard() {
 
 function nodeCard() {
   if (state.selectedNode === 'crowd') return crowdCard();
-  const node = fixture.nodes.find((item) => item.id === state.selectedNode);
+  const node = D.nodes.find((item) => item.id === state.selectedNode);
   if (!node) return '';
   const map = mapState();
   const status = nodeStatus(node.id);
-  const lane = fixture.lanes.find((item) => item.nodes.includes(node.id));
+  const lane = D.lanes.find((item) => item.nodes.includes(node.id));
   const hyp = map.hypotheses[node.id];
-  const hypothesis = hyp && fixture.hypotheses.find((item) => item.id === hyp.id);
+  const hypothesis = hyp && D.hypotheses.find((item) => item.id === hyp.id);
   const hypState = hyp && { open: 'Open', testing: 'Testing in twin', proven: `Proven · ${hyp.score}%`, ruled: `Ruled out · ${hyp.score}%` }[hyp.state];
   const facts = [['Current reading', map.metrics[node.id] || node.metric]];
   if (hypothesis) facts.push([hyp.id, hypState], ['Routed to', hypothesis.owner], ['Disproof condition', hypothesis.disproof]);
   if (map.tags[node.id]) facts.push(['Status', map.tags[node.id]]);
   return `<div class="node-card-head"><div class="node-glyph status-${status}"><i></i></div><div><span>${lane.label}</span><strong>${node.name}</strong></div><button data-map-action="reset" aria-label="Close component details">${icon('close', 16)}</button></div>
     <h3>${statusLabels[status]}</h3>
-    <p>${hypothesis ? hypothesis.claim : status === 'healthy' ? 'No abnormal errors, latency or volume changes on this component.' : map.insight.body}</p>
+    ${hypothesis ? `<div class="claim">${claimHtml(hypothesis.claim)}</div>` : `<p>${status === 'healthy' ? 'No abnormal errors, latency or volume changes on this component.' : map.insight.body}</p>`}
     <dl>${facts.map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join('')}</dl>`;
 }
 
@@ -314,14 +445,14 @@ function updateNodeCard() {
   if (!card) return;
   card.innerHTML = nodeCard();
   card.classList.toggle('open', Boolean(state.selectedNode));
-  card.querySelector('[data-map-action="reset"]')?.addEventListener('click', () => serviceMap?.resetView());
 }
 
 function mapView() {
-  const step = fixture.demoSteps[state.demoStep];
+  const step = D.demoSteps[currentStep()];
   const map = mapState();
   const insight = map.insight;
-  const last = fixture.demoSteps.length - 1;
+  const last = D.demoSteps.length - 1;
+  const playLabel = isLive() ? 'Run the live incident' : state.playing ? 'Pause story' : 'Play story';
   return `
     <h1 class="visually-hidden">Service map</h1>
     <section class="map-stage ${has3d ? '' : 'flat'}" data-reveal>
@@ -329,101 +460,215 @@ function mapView() {
         <article class="stage-story">
           <div class="story-agent">${agentImage(insight.agent, agentForLabel(insight.label), `${insight.label} agent`)}</div>
           <div class="story-copy">
-            <span class="story-kicker"><i>${String(state.demoStep + 1).padStart(2, '0')}</i>${step.time} · ${insight.label}</span>
+            <span class="story-kicker"><i>${String(currentStep() + 1).padStart(2, '0')}</i>${step.time} · ${insight.label}${isLive() ? '<b class="live-tag">Live</b>' : ''}</span>
             <h2>${insight.title}</h2>
             <p>${insight.body}</p>
           </div>
         </article>
-        <ol class="stage-pipeline" aria-label="Avera agent pipeline">${fixture.pipeline.map((stage, index) => `<li class="${index < map.stage ? 'done' : index === map.stage ? 'active' : ''}"><i>${index < map.stage ? '✓' : index + 1}</i><div><strong>${stage.label}</strong><span>${stage.agent}</span></div></li>`).join('')}</ol>
+        <ol class="stage-pipeline" aria-label="Avera agent pipeline">${D.pipeline.map((stage, index) => `<li class="${index < map.stage ? 'done' : index === map.stage ? 'active' : ''}"><i>${index < map.stage ? '✓' : index + 1}</i><div><strong>${stage.label}</strong><span>${stage.agent}</span></div></li>`).join('')}</ol>
       </div>
       <div class="stage-canvas">
         ${has3d ? '<div class="map3d-slot" data-map-slot="full"></div>' : `<div class="topology">${flatTopology()}</div>`}
         <aside class="stage-node ${state.selectedNode ? 'open' : ''}" aria-live="polite">${nodeCard()}</aside>
       </div>
       <div class="stage-bottom">
-        <button class="stage-play" data-action="play" aria-label="${state.playing ? 'Pause story' : 'Play story'}">${icon(state.playing ? 'pause' : 'play', 18)}</button>
-        <ol class="stage-timeline" style="--progress:${state.demoStep / last}">${fixture.demoSteps.map((item, index) => `<li><button class="${index < state.demoStep ? 'done' : ''} ${index === state.demoStep ? 'current' : ''}" data-step="${index}"><time>${item.time}</time><span>${item.label}</span></button></li>`).join('')}</ol>
+        <button class="stage-play" ${isLive() ? 'data-live="run"' : 'data-action="play"'} aria-label="${playLabel}" title="${playLabel}" ${state.busy ? 'disabled' : ''}>${icon(!isLive() && state.playing ? 'pause' : 'play', 18)}</button>
+        <ol class="stage-timeline ${isLive() ? 'live' : ''}" style="--progress:${currentStep() / last}">${D.demoSteps.map((item, index) => `<li><button class="${index < currentStep() ? 'done' : ''} ${index === currentStep() ? 'current' : ''}" ${isLive() ? 'disabled' : `data-step="${index}"`}><time>${item.time}</time><span>${item.label}</span></button></li>`).join('')}</ol>
         ${has3d ? `<div class="map-controls"><button data-map-action="focus">${icon('focus', 16)} Zoom to suspect</button><button data-map-action="reset">${icon('reset', 16)} Reset view</button>${fullscreenButton()}</div>` : ''}
         ${mapLegend()}
       </div>
     </section>`;
 }
 
+function emptyState(title, body, action = '') {
+  return `<section class="empty-state" data-reveal>${agentImage('listening', 'observability', '')}<div><h2>${title}</h2><p>${body}</p>${action}</div></section>`;
+}
+
+function liveStartAction() {
+  return isLive() ? `<button class="primary-button" data-live="run" ${state.busy ? 'disabled' : ''}>${icon('play', 17)} Run the live incident</button>` : '';
+}
+
 function hypothesesView() {
+  const header = pageHeader('Hypotheses', 'Competing explanations ranked by evidence and Ghost Test results.', `<div class="threshold"><span>Handoff threshold</span><strong>85%</strong></div>`);
+  if (!D.hypotheses.length) return `${header}${emptyState('No hypotheses yet', 'The Observability Agent proposes competing explanations once an incident opens.', liveStartAction())}`;
+  const validated = D.hypotheses.find((item) => item.state === 'validated');
+  const lead = validated || D.hypotheses[0];
+  const leadTest = isLive() ? store.run.tests.get(lead.realId) : null;
+  const decision = isLive()
+    ? (validated
+      ? { title: `${validated.id} survives every disproof check`, body: leadTest ? `Failure reproduced ${leadTest.reproduced} of ${leadTest.runs} times through ${validated.zone}${leadTest.control ? ` and ${leadTest.control.reproduced} of ${leadTest.control.runs} through the ${pretty(leadTest.control.route)} control` : ''}.` : '' }
+      : { title: 'No hypothesis has cleared 85% yet', body: 'Ghost Test keeps sending weak candidates back to the Observability Agent with their disproof results.' })
+    : { title: 'H1 survives every disproof check', body: 'Failure reproduced 5 of 5 times through Gateway B and 0 of 5 through the healthy control.' };
   return `
-    ${pageHeader('Hypotheses', 'Competing explanations ranked by evidence and Ghost Test results.', `<div class="threshold"><span>Handoff threshold</span><strong>85%</strong></div>`)}
+    ${header}
     <section class="hypothesis-layout">
       <div class="hypothesis-board">
-        ${fixture.hypotheses.map((hypothesis) => `<article class="hypothesis-row ${hypothesis.state}" data-reveal>
+        ${D.hypotheses.map((hypothesis) => `<article class="hypothesis-row ${hypothesis.state}" data-reveal>
           <div class="hypothesis-id"><span>${hypothesis.id}</span><i>${hypothesis.rank}</i></div>
-          <div class="hypothesis-claim"><div class="row-meta"><span>${hypothesis.zone}</span><em>${hypothesis.state}</em></div><h2>${hypothesis.claim}</h2><p>Routed to ${hypothesis.owner}</p></div>
+          <div class="hypothesis-claim"><div class="row-meta"><span>${hypothesis.zone}</span><em>${hypothesis.state}</em></div><div class="claim">${claimHtml(hypothesis.claim, { headline: 'h2' })}</div><p>Routed to ${hypothesis.owner}</p></div>
           <div class="confidence"><strong><span data-count="${hypothesis.confidence}">${hypothesis.confidence}</span><small>%</small></strong><div><i data-bar="${hypothesis.confidence}" style="width:${hypothesis.confidence}%"></i><b style="left:85%"></b></div><span>${hypothesis.confidence >= 85 ? 'Threshold cleared' : 'Below threshold'}</span></div>
-          <details><summary>Evidence and disproof ${icon('arrow', 16)}</summary><div class="hypothesis-detail"><div><span>Evidence for</span>${hypothesis.evidence.map((item) => `<p>${item}</p>`).join('')}</div><div><span>Evidence against</span><p>${hypothesis.against}</p></div><div><span>Disproof condition</span><p>${hypothesis.disproof}</p></div></div></details>
+          <details><summary>Evidence and disproof ${icon('arrow', 16)}</summary><div class="hypothesis-detail"><div><span>Evidence for</span>${hypothesis.evidence.map((item) => `<p>${item}</p>`).join('') || '<p>No supporting references.</p>'}</div><div><span>Evidence against</span><p>${hypothesis.against}</p></div><div><span>Disproof condition</span><p>${hypothesis.disproof}</p></div></div>${isLive() ? `<div class="hypothesis-actions"><button class="secondary-button compact" data-live="retest" data-hypothesis="${hypothesis.realId}" ${state.busy ? 'disabled' : ''}>${icon('flask', 16)} Re-test with Ghost Test</button></div>` : ''}</details>
         </article>`).join('')}
       </div>
       <aside class="decision-column" data-reveal data-tilt="4">
-        ${agentImage('result', 'ghost', 'Ghost Test agent')}
+        ${agentImage(validated || !isLive() ? 'result' : 'working', 'ghost', 'Ghost Test agent')}
         <span>Ghost Test decision</span>
-        <h2>H1 survives every disproof check</h2>
-        <p>Failure reproduced 5 of 5 times through Gateway B and 0 of 5 through the healthy control.</p>
-        <div class="decision-score"><span>Confidence</span><strong class="num-3d"><span data-count="${fixture.hypotheses[0].confidence}">${fixture.hypotheses[0].confidence}</span>%</strong></div>
+        <h2>${decision.title}</h2>
+        <p>${decision.body}</p>
+        <div class="decision-score"><span>Confidence</span><strong class="num-3d"><span data-count="${lead.confidence}">${lead.confidence}</span>%</strong></div>
         <button class="primary-button" data-view="tests">Open test evidence ${icon('arrow', 17)}</button>
       </aside>
-    </section>`;
+    </section>
+    ${consoleResult('hypotheses')}`;
 }
 
 function traceBars(values) {
-  const max = Math.max(...values);
-  return `<div class="trace-bars">${values.map((value, index) => `<i style="height:${Math.max(8, value / max * 100)}%" class="${index === values.length - 1 && value > 500 ? 'fail' : ''}" title="${value} ms"></i>`).join('')}</div>`;
+  const max = Math.max(1, ...values);
+  return `<div class="trace-bars">${values.map((value, index) => `<i style="height:${Math.max(8, value / max * 100)}%" class="${index === values.length - 1 && value > 500 ? 'fail' : value >= 1000 ? 'fail' : ''}" title="${value} ms"></i>`).join('')}</div>`;
+}
+
+function consoleResult(scope) {
+  const result = state.consoleResult;
+  if (!result || result.scope !== scope) return '';
+  return `<section class="console-card ${result.ok ? 'ok' : 'bad'}" data-reveal><div class="console-head"><i>${icon(result.ok ? 'check' : 'close', 16)}</i><strong>${result.title}</strong><button data-action="dismiss-console" aria-label="Dismiss">${icon('close', 14)}</button></div>${result.body}</section>`;
 }
 
 function testsView() {
+  const header = pageHeader('Ghost tests', 'Synthetic-only validation in the isolated digital twin.', `<div class="sandbox-chip"><i></i>Sandbox isolated</div>`);
+  if (!D.tests.length) return `${header}${emptyState('No Ghost Tests have run yet', 'Each hypothesis is tested against the isolated digital twin once the Observability Agent routes it.', liveStartAction())}`;
+  const summary = isLive() ? D.testSummary : { runs: 15, reproduced: 5, plans: 5, controls: 3, elapsed: '3:32' };
+  const validated = isLive() ? D.hypotheses.find((item) => item.state === 'validated') : null;
+  const busy = (key) => (state.busy === key ? 'disabled aria-busy="true"' : state.busy ? 'disabled' : '');
   return `
-    ${pageHeader('Ghost tests', 'Synthetic-only validation in the isolated digital twin.', `<div class="sandbox-chip"><i></i>Sandbox isolated</div>`)}
+    ${header}
     <section class="test-summary" data-reveal>
-      <div class="test-agent">${agentImage('working', 'ghost', 'Ghost Test agent working')}<div><span>Validation complete</span><h2>15 tests separated the cause from the decoys.</h2><p>No customer data or funds entered the test environment.</p></div></div>
-      <div class="test-count"><span>Tests run</span><strong data-count="15">15</strong><small>5 plans · 3 controls</small></div>
-      <div class="test-count"><span>Reproduced</span><strong data-count="5">5</strong><small>Gateway B route only</small></div>
-      <div class="test-count"><span>Elapsed</span><strong>3:32</strong><small>Digital twin time</small></div>
+      <div class="test-agent">${agentImage(validated || !isLive() ? 'working' : 'listening', 'ghost', 'Ghost Test agent')}<div><span>${validated || !isLive() ? 'Validation complete' : 'Validation running'}</span><h2>${summary.runs} test runs separated the cause from the decoys.</h2><p>No customer data or funds entered the test environment.</p></div></div>
+      <div class="test-count"><span>Test runs</span><strong data-count="${summary.runs}">${summary.runs}</strong><small>${summary.plans} plans · ${summary.controls} controls</small></div>
+      <div class="test-count"><span>Reproduced</span><strong data-count="${summary.reproduced}">${summary.reproduced}</strong><small>${validated ? `${validated.zone} only` : isLive() ? 'No validated route yet' : 'Gateway B route only'}</small></div>
+      <div class="test-count"><span>Elapsed</span><strong>${summary.elapsed}</strong><small>Digital twin time</small></div>
     </section>
     <section class="test-table-wrap" data-reveal data-stagger>
       <div class="table-head"><span>Test</span><span>Plan</span><span>Trace latency</span><span>Runs</span><span>Result</span></div>
-      ${fixture.tests.map((test) => `<article class="test-row"><div><strong>${test.id}</strong><span>${test.hypothesis}</span></div><div><strong>${test.name}</strong><span>${test.duration}</span></div><div>${traceBars(test.trace)}<small>${Math.max(...test.trace)} ms peak</small></div><div><strong>${test.runs}</strong><span>reproduced</span></div><div><em class="verdict-${test.verdict}">${test.result}</em></div></article>`).join('')}
+      ${D.tests.map((test) => `<article class="test-row"><div><strong>${test.id}</strong><span>${test.hypothesis}</span></div><div><strong>${test.name}</strong><span>${test.duration}</span></div><div>${traceBars(test.trace)}<small>${test.peak ?? Math.max(...test.trace)} ms peak</small></div><div><strong>${test.runs}</strong><span>reproduced</span></div><div><em class="verdict-${test.verdict}">${test.result}</em></div></article>`).join('')}
     </section>
+    ${isLive() ? `<section class="twin-actions" data-reveal>
+      <div><strong>Digital twin console</strong><span>Every action runs on detached copies of the simulated bank. The live route never changes here.</span></div>
+      <button class="secondary-button" data-live="twin" ${busy('twin')}>${icon('branch', 17)} Simulate Bank X via ${pretty(twinTarget())}</button>
+      <button class="secondary-button" data-live="rerun" ${validated ? '' : 'disabled'} ${busy('rerun')}>${icon('reset', 17)} Rerun ${validated ? validated.id : 'validated'} test</button>
+    </section>${consoleResult('tests')}` : ''}
     <div class="safety-note"><i>${icon('check')}</i><div><strong>Verification boundary held</strong><span>Tests ran with synthetic identities and zero-value transactions in a copy of the service graph.</span></div></div>`;
 }
 
 function impactView() {
-  const i = fixture.impact;
+  const i = D.impact;
+  const header = pageHeader('Customer impact', 'Affected customers, transactions and silent behavioural signals.', `<div class="export-link">${isLive() ? (i.snapshot && i.snapshot !== '—' ? `Snapshot at ${i.snapshot}` : 'Waiting for Blast Radius') : 'Snapshot at 10:57:06'}</div>`);
+  if (isLive() && !i.affected) return `${header}${emptyState('Blast Radius has not run yet', 'Avera searches every transaction for the validated failure fingerprint, including customers who never complained.', liveStartAction())}`;
   return `
-    ${pageHeader('Customer impact', 'Affected customers, transactions and silent behavioural signals.', `<div class="export-link">Snapshot at 10:57:06</div>`)}
+    ${header}
     <section class="impact-reveal" data-reveal>
       <div class="impact-copy"><span>Blast Radius result</span><h2>${formatNumber(i.silent)} customers were found before they had to complain.</h2><p>The validated fingerprint was matched across live and historical transaction records.</p></div>
       <div class="impact-numbers"><div class="complained" data-tilt="8"><strong class="num-3d" data-count="${i.complained}">${formatNumber(i.complained)}</strong><span>complained</span></div><div class="impact-connector"><i></i><b></b><small>Avera found</small></div><div class="affected" data-tilt="8"><strong class="num-3d" data-count="${i.affected}">${formatNumber(i.affected)}</strong><span>affected</span></div></div>
       <div class="silent-number"><span>Silent customers</span><strong data-count="${i.silent}">${formatNumber(i.silent)}</strong><small>${i.prevention}% complaint prevention opportunity</small></div>
     </section>
     <section class="impact-detail" data-reveal>
-      <div class="impact-stats"><div><span>Affected transactions</span><strong>${formatNumber(i.transactions)}</strong></div><div><span>Estimated exposure</span><strong>${i.exposure}</strong></div><div><span>First affected</span><strong>10:42 AM</strong></div></div>
-      <div class="segment-list"><div class="section-title"><span>Customer segments</span><small>${formatNumber(i.affected)} total</small></div>${i.segments.map((segment) => `<div class="segment"><span>${segment.label}</span><div><i data-bar="${segment.share}" style="width:${segment.share}%"></i></div><strong>${formatNumber(segment.value)}</strong><small>${segment.share}%</small></div>`).join('')}</div>
+      <div class="impact-stats"><div><span>Affected transactions</span><strong>${formatNumber(i.transactions)}</strong></div><div><span>Estimated exposure</span><strong>${i.exposure}</strong></div><div><span>First affected</span><strong>${isLive() ? i.firstAffected : '10:42 AM'}</strong></div></div>
+      <div class="segment-list"><div class="section-title"><span>${i.segmentsTitle || 'Customer segments'}</span><small>${formatNumber(i.affected)} total</small></div>${i.segments.map((segment) => `<div class="segment"><span>${segment.label}</span><div><i data-bar="${Math.min(100, segment.share)}" style="width:${Math.min(100, segment.share)}%"></i></div><strong>${formatNumber(segment.value)}</strong><small>${segment.share}%</small></div>`).join('')}</div>
       <div class="impact-agent">${agentImage('result', 'blast', 'Blast Radius agent')}<div><span>Blast Radius</span><strong>Search complete</strong><p>Every matching customer has been tokenised and added to the notification audience.</p><button class="text-button" data-view="approvals">Review customer message ${icon('arrow', 16)}</button></div></div>
     </section>`;
 }
 
 function planView() {
-  const plan = fixture.fixPlan;
+  const plan = D.fixPlan;
+  const header = (extra) => pageHeader('Fix plan', 'Containment, permanent resolution, rollback and verification.', extra);
+  if (!plan) return `${header('')}${emptyState('No fix plan yet', 'The Resolution Agent drafts containment, permanent fix and reconciliation steps once Ghost Test validates a cause.', liveStartAction())}`;
+  const remediation = state.remediation && state.remediation.incident_id === D.incident.id ? state.remediation : null;
+  const anyToken = auth.get('engineer') || auth.get('customer_dispute');
   return `
-    ${pageHeader('Fix plan', 'Containment, permanent resolution, rollback and verification.', `<div class="plan-confidence"><span>Simulation success</span><strong>${plan.simulationSuccess}%</strong></div>`)}
+    ${header(plan.simulationSuccess != null ? `<div class="plan-confidence"><span>Simulation success</span><strong>${plan.simulationSuccess}%</strong></div>` : '')}
     <section class="plan-hero" data-reveal>
-      <div><span>Validated cause</span><h2>Gateway B acknowledgement handling fails for Bank X transfers.</h2><p>Contain the route first, then repair the connector and reconcile uncertain transaction states.</p></div>
-      <div class="eta-band"><div><span>Containment</span><strong>${plan.containmentEta}</strong></div><i></i><div><span>Permanent fix</span><strong>${plan.fullEta}</strong></div><i></i><div><span>Reconciliation</span><strong>${plan.reconciliationEta}</strong></div></div>
+      <div><span>Validated cause${plan.causeZone ? ` · ${plan.causeZone}` : ''}</span><div class="claim">${claimHtml(isLive() ? plan.cause : 'Gateway B acknowledgement handling fails for Bank X transfers.', { headline: 'h2' })}</div><p>${isLive() ? `Owners: ${plan.owners.join(', ')}.` : 'Contain the route first, then repair the connector and reconcile uncertain transaction states.'}</p></div>
+      <div class="eta-band"><div><span>Containment</span>${etaHtml(plan.containmentEta)}</div><i></i><div><span>Permanent fix</span>${etaHtml(plan.fullEta)}</div><i></i><div><span>${plan.reconciliationLabel || 'Reconciliation'}</span>${etaHtml(plan.reconciliationEta)}</div></div>
     </section>
     <section class="plan-body" data-reveal>
-      <div class="steps" data-stagger><div class="section-title"><span>Execution plan</span><small>Human approval required before steps 01 and 02</small></div>${plan.steps.map((step, index) => `<article class="plan-step"><span>${step.n}</span><div><small>${step.owner}</small><h3>${step.title}</h3><p>${step.detail}</p></div><em class="step-${step.status}">${step.status}</em>${index < plan.steps.length - 1 ? '<i></i>' : ''}</article>`).join('')}</div>
+      <div class="steps" data-stagger><div class="section-title"><span>Execution plan</span><small>Human approval required before routing, messaging and reconciliation</small></div>${plan.steps.map((step, index) => `<article class="plan-step"><span>${step.n}</span><div><small>${step.owner}</small><h3>${step.title}</h3><p>${step.detail}</p></div><em class="step-${step.status}">${step.status}</em>${index < plan.steps.length - 1 ? '<i></i>' : ''}</article>`).join('')}</div>
       <aside class="rollback" data-tilt="3"><div class="rollback-head">${icon('reset')}<span>Rollback condition</span></div><p>${plan.rollback}</p><div class="guardrail"><strong>No money movement</strong><span>Avera may prepare reconciliation batches. A human executes every financial action.</span></div><button class="primary-button" data-view="approvals">Review approvals ${icon('arrow', 17)}</button></aside>
-    </section>`;
+    </section>
+    ${isLive() ? `<section class="remediation-panel" data-reveal>
+      <div class="section-title"><span>Signed remediation record</span><small>GET /remediation/${D.incident.id}</small></div>
+      ${remediation ? `<div class="remediation-grid">
+        <div><span>Case status</span><strong>${pretty(remediation.status)}</strong></div>
+        <div><span>Playbook</span><strong>${pretty(remediation.plan.playbook)}</strong></div>
+        <div><span>Cause confidence</span><strong>${Math.round(remediation.plan.cause_confidence * 100)}%</strong></div>
+        <div><span>Containment estimate</span><strong>${remediation.plan.eta_containment.minutes} min · ${remediation.plan.eta_containment.confidence}</strong></div>
+        <div><span>Twin simulation</span><strong>${remediation.plan.simulation ? `${(remediation.plan.simulation.success_rate * 100).toFixed(1)}% of ${remediation.plan.simulation.samples}` : '—'}</strong></div>
+        <div><span>Projected if uncontained</span><strong>${formatNumber(remediation.blast_radius.projected_count || 0)} customers</strong></div>
+      </div>
+      <ol class="remediation-tracks">${remediation.plan.steps.map((step) => `<li><b>${pretty(step.track)}</b><span>${step.title}</span><em>${step.eta_minutes} min${step.approval_kind ? ` · needs ${step.approval_kind} approval` : ''}</em></li>`).join('')}</ol>
+      <p class="remediation-note">${remediation.events.length} resolution event${remediation.events.length === 1 ? '' : 's'} recorded · ${remediation.blast_radius.projection_basis}</p>`
+      : `<p class="remediation-note">${anyToken ? 'Load the full case record, including track estimates and the projected blast radius.' : 'Sign in as an approver on the Approvals page to read the full case record.'}</p>
+      <button class="secondary-button compact" data-live="remediation" ${anyToken && !state.busy ? '' : 'disabled'}>${icon('plan', 16)} Load case record</button>`}
+    </section>` : ''}`;
 }
 
 function approvalsView() {
+  if (!isLive()) return fixtureApprovalsView();
+  const header = pageHeader('Approvals', 'Customer communication and production changes requiring human authority.', `<div class="approval-summary"><strong>${pendingCount()}</strong><span>pending decisions</span></div>`);
+  if (!D.approvals.length) return `${header}${emptyState('Nothing awaits approval', 'Routing changes, customer messages, reconciliation batches and code patches appear here after the Blast Radius Agent plans the fix.', liveStartAction())}`;
+  const active = D.approvals.find((item) => item.id === state.activeApproval) || D.approvals.find((item) => item.status === 'pending') || D.approvals[0];
+  state.activeApproval = active.id;
+  const session = auth.get(active.requiredRole);
+  const statusLabel = (item) => (item.closedReason === 'superseded' ? 'superseded' : item.status);
+  const preview = { sms: phonePreview, config: routeChange, code: codeDiff, reconciliation: reconPreview }[active.rawKind] || (() => '');
+  return `
+    ${header}
+    <section class="approval-layout" data-reveal>
+      <div class="approval-queue" data-stagger>
+        <div class="section-title"><span>Approval queue</span><small>Hash-chained audit log</small></div>
+        ${D.approvals.map((approval) => `<button class="approval-item ${approval.id === active.id ? 'active' : ''}" data-approval="${approval.id}"><i class="level-${approval.level}">L${approval.level}</i><div><span>${approval.kind}</span><strong>${approval.title}</strong><small>${approval.owner} · ${approval.created}</small></div><em class="status-${statusLabel(approval)}">${statusLabel(approval)}</em>${icon('arrow', 16)}</button>`).join('')}
+      </div>
+      <div class="approval-detail">
+        <div class="approval-detail-head"><div><span>${active.id} · Level ${active.level} · needs ${active.owner}</span><h2>${active.title}</h2></div><em>${active.risk} risk</em></div>
+        ${preview(active)}
+        <div class="approval-why"><strong>Why this action is recommended</strong><p>${approvalReason(active)}</p></div>
+        ${approverBar(active, session)}
+        <div class="decision-actions"><button class="secondary-button" data-decision="reject" ${active.status !== 'pending' || !session || state.busy ? 'disabled' : ''}>Reject</button><button class="primary-button" data-decision="approve" ${active.status !== 'pending' || !session || state.busy ? 'disabled' : ''}>${active.status === 'pending' ? (state.busy === 'decide' ? 'Recording decision…' : 'Approve action') : `Decision: ${statusLabel(active)}${active.approver ? ` by ${active.approver}` : ''}`}</button></div>
+      </div>
+    </section>`;
+}
+
+// "4 hours (3 hours for permanent fix; 4 hours for reconciliation)" reads as a figure plus a caption.
+function etaHtml(text) {
+  const value = String(text || '—');
+  const [, figure, rest] = /^([\d.,]+\s*[a-z]+)\b\s*(.*)$/i.exec(value) || [null, value, ''];
+  const note = rest.replace(/^\((.*)\)$/, '$1').trim();
+  return `<strong>${figure}</strong>${note ? `<small>${note}</small>` : ''}`;
+}
+
+function approverBar(active, session) {
+  if (active.status !== 'pending') return '';
+  if (session) return `<div class="approver-bar signed"><i>${icon('check', 15)}</i><span>Signed in as <strong>${session.sub}</strong> · ${pretty(session.role)}</span><button class="text-button inline" data-auth="signout" data-role="${session.role}">Sign out</button></div>`;
+  const role = active.requiredRole;
+  const pasting = state.tokenFormRole === role;
+  return `<div class="approver-bar">
+    <span>Only a <strong>${pretty(role)}</strong> approver can decide this. Decisions are verified with a signed JWT.</span>
+    <div class="approver-actions">
+      <button class="secondary-button compact" data-auth="signin" data-role="${role}" ${state.busy ? 'disabled' : ''}>Sign in as ${pretty(role)}</button>
+      <button class="text-button inline" data-auth="paste" data-role="${role}">Use an identity-provider token</button>
+    </div>
+    ${pasting ? `<form class="token-form" data-token-form="${role}"><input name="token" type="password" autocomplete="off" placeholder="Paste a ${pretty(role)} JWT" required/><button class="primary-button compact" type="submit">Use token</button></form>` : ''}
+  </div>`;
+}
+
+function approvalReason(item) {
+  const p = item.payload;
+  if (item.rawKind === 'config') return `The digital twin shows ${p.simulated_success_rate != null ? `${(p.simulated_success_rate * 100).toFixed(1)}%` : 'a passing'} success across ${formatNumber(p.simulation_samples || 0)} synthetic transfers. Rollback to ${pretty(p.rollback?.action?.to_route)} triggers automatically if errors exceed ${p.rollback ? `${p.rollback.threshold * 100}%` : 'the threshold'} within ${p.rollback?.window_minutes || 10} minutes.`;
+  if (item.rawKind === 'sms') return `The message goes to ${formatNumber(p.recipient_count || 0)} tokenised affected customers, uses the plan estimate (“${p.eta_phrase || 'resolution estimate'}”) and includes only their own transfer context.`;
+  if (item.rawKind === 'reconciliation') return `Avera prepares ${formatNumber(p.item_count || 0)} uncertain transfers worth ${naira(p.total_ngn)} for human review. ${p.executed_by_avera ? '' : 'Avera never executes reversals or moves funds.'}`;
+  if (item.rawKind === 'code') return `${p.summary || 'Connector patch prepared.'} ${p.sandbox ? `Sandbox: ${p.sandbox.tests_run} tests, ${p.sandbox.tests_failed} failed.` : ''}`;
+  return 'Recommended by the Resolution workflow.';
+}
+
+function fixtureApprovalsView() {
   const active = fixture.approvals.find((item) => item.id === state.activeApproval) || fixture.approvals[0];
   const status = state.approvals[active.id];
   return `
@@ -442,31 +687,73 @@ function approvalsView() {
     </section>`;
 }
 
-function phonePreview() {
-  return `<div class="phone-preview-wrap"><div class="phone-stage"><div class="phone"><div class="phone-top"><i></i><span>10:58</span><b>● ● ●</b></div><div class="messages-head"><button>${icon('arrow', 15)}</button><div class="message-logo"><img src="/assets/avera-logo.png" alt=""/></div><div><strong>Avera Bank</strong><span>Verified sender</span></div></div><div class="phone-body"><time>Today 10:58</time><p>${fixture.sms}</p><small>Delivered</small></div><div class="phone-home"></div></div></div><div class="message-meta"><div><span>Audience</span><strong>${formatNumber(fixture.impact.affected)} customers</strong></div><div><span>Estimated delivery</span><strong>97.8%</strong></div><div><span>Contact preferences</span><strong>Respected</strong></div></div></div>`;
+function phonePreview(item) {
+  const message = item ? item.payload.message : fixture.sms;
+  const audience = item ? item.payload.recipient_count : fixture.impact.affected;
+  const now = item ? (item.created || '') : '10:58';
+  const samples = item?.payload.samples?.length;
+  return `<div class="phone-preview-wrap"><div class="phone-stage"><div class="phone"><div class="phone-top"><i></i><span>${now}</span><b>● ● ●</b></div><div class="messages-head"><button>${icon('arrow', 15)}</button><div class="message-logo"><img src="/assets/avera-logo.png" alt=""/></div><div><strong>Avera Bank</strong><span>Verified sender</span></div></div><div class="phone-body"><time>Today ${now}</time><p>${message}</p><small>${item ? 'Preview' : 'Delivered'}</small></div><div class="phone-home"></div></div></div><div class="message-meta"><div><span>Audience</span><strong>${formatNumber(audience || 0)} customers</strong></div><div><span>${item ? 'Personalised previews' : 'Estimated delivery'}</span><strong>${item ? `${samples || 0} samples` : '97.8%'}</strong></div><div><span>${item ? 'Template fallback' : 'Contact preferences'}</span><strong>${item ? (item.payload.fallback_used ? 'Used' : 'Not needed') : 'Respected'}</strong></div></div></div>`;
 }
 
-function routeChange() {
-  return `<div class="route-diff"><div><span>Current route</span><strong>Bank X</strong><i></i><em>Gateway B</em></div><b>${icon('arrow', 22)}</b><div class="proposed"><span>Proposed route</span><strong>Bank X</strong><i></i><em>Gateway C</em></div><p><span>Simulation</span><strong>96.7% successful</strong><small>5,000 synthetic transactions</small></p></div>`;
+function routeChange(item) {
+  if (!item) return `<div class="route-diff"><div><span>Current route</span><strong>Bank X</strong><i></i><em>Gateway B</em></div><b>${icon('arrow', 22)}</b><div class="proposed"><span>Proposed route</span><strong>Bank X</strong><i></i><em>Gateway C</em></div><p><span>Simulation</span><strong>96.7% successful</strong><small>5,000 synthetic transactions</small></p></div>`;
+  const p = item.payload;
+  const gateway = (route) => pretty(route?.split('.')[0]);
+  return `<div class="route-diff"><div><span>Current route</span><strong>${pretty(p.destination_bank)}</strong><i></i><em>${gateway(p.from_route)}</em></div><b>${icon('arrow', 22)}</b><div class="proposed"><span>Proposed route</span><strong>${pretty(p.destination_bank)}</strong><i></i><em>${gateway(p.to_route)}</em></div><p><span>Simulation</span><strong>${p.simulated_success_rate != null ? `${(p.simulated_success_rate * 100).toFixed(1)}% successful` : 'Not simulated'}</strong><small>${formatNumber(p.simulation_samples || 0)} synthetic transactions</small></p></div>`;
 }
 
-function codeDiff() {
-  return `<div class="code-diff"><div class="code-head"><span>gateway_b/connector.py</span><em>+8 −3</em></div><pre><span class="line">  def await_ack(transaction):</span>
+function reconPreview(item) {
+  const p = item.payload;
+  return `<div class="route-diff recon"><div><span>Batch</span><strong>${p.batch_id}</strong></div><div><span>Uncertain transfers</span><strong>${formatNumber(p.item_count || 0)}</strong></div><div class="proposed"><span>Value under review</span><strong>${naira(p.total_ngn)}</strong></div><p><span>Execution</span><strong>${p.executed_by_avera ? 'Avera executes' : 'A human executes every reversal'}</strong><small>Avera only prepares the batch</small></p></div>`;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+}
+
+function codeDiff(item) {
+  if (!item) {
+    return `<div class="code-diff"><div class="code-head"><span>gateway_b/connector.py</span><em>+8 −3</em></div><pre><span class="line">  def await_ack(transaction):</span>
 <span class="removed">-   return poll(transaction, timeout=15)</span>
 <span class="added">+   result = poll(transaction, timeout=8)</span>
 <span class="added">+   if result.timed_out:</span>
 <span class="added">+       return reconcile_idempotently(transaction)</span>
 <span class="line">    return result</span></pre></div>`;
+  }
+  const lines = (item.payload.diff || '').split('\n').filter((line) => !line.startsWith('---') && !line.startsWith('+++'));
+  const added = lines.filter((line) => line.startsWith('+')).length;
+  const removed = lines.filter((line) => line.startsWith('-')).length;
+  return `<div class="code-diff"><div class="code-head"><span>${escapeHtml(item.payload.target || 'patch')}</span><em>+${added} −${removed}</em></div><pre>${lines.map((line) => `<span class="${line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : 'line'}">${escapeHtml(line)}</span>`).join('\n')}</pre></div>`;
 }
 
 function timelineView() {
+  const events = D.timeline;
+  const header = pageHeader('Incident timeline', 'Every signal, agent decision, approval and verified action in order.', `<button class="secondary-button compact" data-action="export">Export audit trail</button>`);
+  const pending = isLive() ? D.approvals.filter((item) => item.status === 'pending') : [];
+  const resolved = isLive() && currentStep() === 6;
+  const now = isLive()
+    ? (resolved ? { title: 'Incident resolved', body: 'The reroute was approved, applied and verified by a Ghost Test rerun. Follow-up work stays open for engineers.' }
+      : pending.length ? { title: `Awaiting ${pending.length} approval${pending.length === 1 ? '' : 's'}`, body: 'Nothing changes in production until an authorised human approves it.' }
+        : events.length ? { title: 'Investigation in progress', body: 'Agents are fusing signals and testing explanations.' } : { title: 'No incident yet', body: 'Start the demo from the controls (D) to stream a live incident.' })
+    : { title: 'Awaiting two approvals', body: 'The incident remains contained in the digital twin. No production change has been applied.' };
+  const scale = timeScale(events);
   return `
-    ${pageHeader('Incident timeline', 'Every signal, agent decision, approval and verified action in order.', `<button class="secondary-button compact">Export audit trail</button>`)}
+    ${header}
     <section class="timeline-layout" data-reveal>
-      <div class="timeline-scale"><span>10:40</span><span>10:45</span><span>10:50</span><span>10:55</span><span>11:00</span><span>11:05</span></div>
-      <div class="timeline-events" data-stagger>${fixture.timeline.map((event, index) => `<article class="timeline-event type-${event.type}"><time>${event.time}</time><i><b></b></i><div><span>${event.type}</span><h2>${event.title}</h2><p>${event.detail}</p></div>${index < fixture.timeline.length - 1 ? '<em></em>' : ''}</article>`).join('')}</div>
-      <aside class="timeline-now"><span>Now</span><strong>Awaiting two approvals</strong><p>The incident remains contained in the digital twin. No production change has been applied.</p><button class="primary-button" data-view="approvals">Open approval queue ${icon('arrow', 17)}</button></aside>
+      <div class="timeline-scale">${scale.map((label) => `<span>${label}</span>`).join('')}</div>
+      <div class="timeline-events" data-stagger>${events.length ? events.map((event, index) => `<article class="timeline-event type-${event.type}"><time>${event.time}</time><i><b></b></i><div><span>${event.type}</span><h2>${event.title}</h2><p>${event.detail}</p></div>${index < events.length - 1 ? '<em></em>' : ''}</article>`).join('') : '<p class="empty-result">No signals yet.</p>'}</div>
+      <aside class="timeline-now"><span>Now</span><strong>${now.title}</strong><p>${now.body}</p><button class="primary-button" data-view="approvals">Open approval queue ${icon('arrow', 17)}</button>
+        ${isLive() ? `<form class="complaint-form" data-complaint-form><label for="complaint-text">Log a customer report</label><textarea id="complaint-text" name="text" rows="2" maxlength="280" placeholder="e.g. My transfer to Bank X is still pending" required></textarea><button class="secondary-button compact" type="submit" ${state.busy ? 'disabled' : ''}>Send to Avera</button><small>Posted to <code>/ingest/command-centre</code>; Avera re-investigates automatically.</small></form>` : ''}
+      </aside>
     </section>`;
+}
+
+function timeScale(events) {
+  if (!isLive()) return ['10:40', '10:45', '10:50', '10:55', '11:00', '11:05'];
+  const times = events.map((event) => Date.parse(event.at)).filter(Number.isFinite);
+  if (times.length < 2) return [];
+  const [min, max] = [Math.min(...times), Math.max(...times)];
+  return Array.from({ length: 6 }, (_, index) => new Date(min + ((max - min) * index) / 5).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
 }
 
 function memoryView() {
@@ -535,12 +822,81 @@ async function navigate(view) {
   navigating = false;
 }
 
-function showToast(message) {
-  const region = document.querySelector('.toast-region');
-  if (!region) return;
-  region.innerHTML = `<div class="toast">${icon('check', 18)}<span>${message}</span></div>`;
-  window.setTimeout(() => { if (region) region.innerHTML = ''; }, 3200);
+// The toast region lives outside the app root so live re-renders never wipe a message.
+const toastRegion = document.createElement('div');
+toastRegion.className = 'toast-region';
+toastRegion.setAttribute('aria-live', 'polite');
+document.body.appendChild(toastRegion);
+let toastTimer;
+
+function showToast(message, tone = 'ok') {
+  toastRegion.innerHTML = `<div class="toast ${tone}">${icon(tone === 'ok' ? 'check' : 'close', 18)}<span>${message}</span></div>`;
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => { toastRegion.innerHTML = ''; }, tone === 'ok' ? 3600 : 6000);
 }
+
+// When Resolution is waiting on a human, ask for the decision outright instead of letting the moment pass.
+const promptRegion = document.createElement('div');
+promptRegion.className = 'approval-prompt-region';
+document.body.appendChild(promptRegion);
+const dismissedPrompts = new Set();
+
+function pendingReroute() {
+  if (currentStep() !== 5) return null;
+  if (isLive()) return D.approvals.find((item) => item.rawKind === 'config' && item.status === 'pending') || null;
+  const item = fixture.approvals.find((approval) => approval.kind === 'Routing change');
+  return item && state.approvals[item.id] === 'pending' ? item : null;
+}
+
+function drawApprovalPrompt() {
+  const pending = state.loading || state.view === 'approvals' ? null : pendingReroute();
+  const item = pending && !dismissedPrompts.has(pending.id) ? pending : null;
+  const session = item && isLive() ? auth.get(item.requiredRole) : null;
+  const key = item ? [item.id, state.busy, Boolean(session)].join('|') : '';
+  if (key === promptRegion.dataset.key) return;
+  promptRegion.dataset.key = key;
+  if (!item) {
+    promptRegion.innerHTML = '';
+    return;
+  }
+  const reason = isLive() ? approvalReason(item) : `The digital twin passed ${D.fixPlan.simulationSuccess}% of synthetic transfers through Gateway C. Rollback is automatic if errors rise.`;
+  const signedIn = !isLive() || session;
+  promptRegion.innerHTML = `
+    <section class="approval-prompt" role="alertdialog" aria-labelledby="approval-prompt-title" aria-describedby="approval-prompt-reason">
+      <img src="/assets/agents/resolution/agent-listen-a.png" alt=""/>
+      <div class="prompt-body">
+        <span class="prompt-agent"><i></i>Resolution · Waiting for approval</span>
+        <h2 id="approval-prompt-title">${item.title}</h2>
+        <p id="approval-prompt-reason">${reason}</p>
+        <small>Only ${item.owner} can approve this. Nothing changes in production until you do.${session ? ` Signed in as ${session.sub}.` : ''}</small>
+        <div class="prompt-actions">
+          <button class="primary-button" data-prompt="approve" ${state.busy ? 'disabled' : ''}>${state.busy === 'decide' || state.busy === 'signin' ? 'Recording decision…' : signedIn ? 'Approve reroute' : `Sign in & approve`}</button>
+          <button class="secondary-button" data-prompt="review">Review details</button>
+          <button class="text-button inline" data-prompt="later">Later</button>
+        </div>
+      </div>
+    </section>`;
+}
+
+promptRegion.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-prompt]');
+  const item = button && pendingReroute();
+  if (!item) return;
+  state.activeApproval = item.id;
+  const choice = button.dataset.prompt;
+  if (choice === 'later') {
+    dismissedPrompts.add(item.id);
+    drawApprovalPrompt();
+  } else if (choice === 'review') {
+    navigate('approvals');
+  } else if (!isLive()) {
+    decide('approved');
+  } else {
+    if (!auth.get(item.requiredRole)) await authAction('signin', item.requiredRole);
+    if (auth.get(item.requiredRole)) await decideLive('approve');
+    else navigate('approvals');
+  }
+});
 
 function setStep(step) {
   state.demoStep = Math.max(0, Math.min(step, fixture.demoSteps.length - 1));
@@ -559,7 +915,8 @@ function togglePlay(fromPanel = false) {
     if (fromPanel) state.demoOpen = true;
     if (state.demoStep === fixture.demoSteps.length - 1) state.demoStep = 0;
     playTimer = window.setInterval(() => {
-      if (state.demoStep >= fixture.demoSteps.length - 1) {
+      // Playback stops at the approval gate: the reroute needs a human decision before it can resolve.
+      if (state.demoStep >= fixture.demoSteps.length - 1 || pendingReroute()) {
         clearInterval(playTimer);
         state.playing = false;
       } else state.demoStep += 1;
@@ -570,6 +927,10 @@ function togglePlay(fromPanel = false) {
 }
 
 function decide(decision) {
+  if (isLive()) {
+    decideLive(decision);
+    return;
+  }
   const approval = fixture.approvals.find((item) => item.id === state.activeApproval);
   state.approvals[approval.id] = decision;
   render();
@@ -582,29 +943,231 @@ function decide(decision) {
   }
 }
 
+const DECISION_ERRORS = {
+  401: 'Your approver session is invalid or expired. Sign in again.',
+  403: 'This approver role cannot decide this action.',
+  404: 'This approval is not visible to your role.',
+  409: 'This approval is no longer pending.',
+  412: 'The action changed since it was shown. Review the refreshed version and decide again.',
+};
+
+async function decideLive(decision) {
+  const item = D.approvals.find((approval) => approval.id === state.activeApproval);
+  const session = item && auth.get(item.requiredRole);
+  if (!item || !session) return;
+  await runBusy('decide', async () => {
+    // Read the authoritative record first so the decision binds to the exact payload shown.
+    const current = await api.approval(item.id, session.token);
+    const decided = await api.decide(item.id, session.token, decision, current.payload_hash);
+    await refreshHealth();
+    showToast(`${item.kind} ${decided.status} by ${decided.approver}. The audit record has been updated.`);
+  }, (error) => {
+    if (error.status === 401) auth.clear(item.requiredRole);
+    return DECISION_ERRORS[error.status] || error.message;
+  });
+}
+
+async function runBusy(key, task, describeError = (error) => error.message) {
+  if (state.busy) return;
+  state.busy = key;
+  render();
+  try {
+    await task();
+  } catch (error) {
+    showToast(describeError(error), 'bad');
+  } finally {
+    state.busy = null;
+    render();
+  }
+}
+
+const wait = (ms) => new Promise((resolve) => { window.setTimeout(resolve, ms); });
+
+async function liveAction(action, target) {
+  const actions = {
+    start: async () => {
+      store.reset();
+      const receipt = await api.demoStart();
+      showToast(`Healthy baseline started: ${formatNumber(receipt.baseline_transfers)} transfers, Bank X via ${pretty(receipt.bank_x_route)}.`);
+    },
+    inject: async () => {
+      const receipt = await api.demoInject();
+      showToast(`Failure injected: ${formatNumber(receipt.transactions)} transfers to ${pretty(receipt.destination_bank)} through ${pretty(receipt.fault_gateway)}.`);
+    },
+    reset: async () => {
+      store.reset();
+      await api.demoReset();
+      state.remediation = null;
+      showToast('Simulated bank reset to its baseline.');
+    },
+    run: async () => {
+      if (store.step() === 6 || !store.run.started) {
+        store.reset();
+        state.remediation = null;
+        await api.demoStart();
+        await wait(1200);
+      }
+      if (!store.run.firstFailureTs) {
+        const receipt = await api.demoInject();
+        showToast(`Failure injected silently: ${formatNumber(receipt.transactions)} Bank X transfers. Watch Avera respond.`);
+      } else {
+        showToast('An incident is already in progress.', 'bad');
+      }
+    },
+    investigate: async () => {
+      const result = await api.investigate();
+      showToast(`Investigation ${result.state}${result.hypotheses ? ` · ${result.hypotheses.length} hypotheses` : ''}.`);
+    },
+    replay: async () => {
+      store.reset();
+      const receipt = await api.replayFixture();
+      showToast(`Replayed ${formatNumber(receipt.records)} recorded records (${formatNumber(receipt.inserted)} new).`);
+    },
+    retest: async () => {
+      const hypothesis = store.run.hypotheses.get(target.dataset.hypothesis);
+      const result = await api.submitHypotheses([hypothesis]);
+      const evaluation = result.evaluations[0];
+      state.consoleResult = {
+        scope: 'hypotheses',
+        ok: result.validated_hypothesis_ids.length > 0,
+        title: `Ghost Test re-ran ${pretty(hypothesis.zone)}`,
+        body: `<p>${result.summary}</p><dl><div><dt>Verdict</dt><dd>${evaluation.test_result.verdict}</dd></div><div><dt>Confidence</dt><dd>${Math.round(evaluation.test_result.confidence * 100)}%</dd></div><div><dt>Reproduced</dt><dd>${evaluation.test_result.reproduced}/${evaluation.test_result.runs}</dd></div><div><dt>Handoff</dt><dd>${result.send_back_to_observability ? 'Sent back to Observability' : 'Eligible'}</dd></div></dl>`,
+      };
+    },
+    twin: async () => {
+      const receipt = await api.simulateTwin(twinTarget());
+      state.consoleResult = {
+        scope: 'tests',
+        ok: receipt.candidate_failures <= receipt.baseline_failures,
+        title: `Twin: ${pretty(receipt.destination_bank)} via ${pretty(receipt.to_gateway)}`,
+        body: `<dl><div><dt>Current route ${pretty(receipt.from_gateway)}</dt><dd>${receipt.baseline_completed}/${receipt.runs} completed · ${receipt.baseline_failures} failed</dd></div><div><dt>Candidate ${pretty(receipt.to_gateway)}</dt><dd>${receipt.candidate_completed}/${receipt.runs} completed · ${receipt.candidate_failures} failed</dd></div><div><dt>Improvement</dt><dd>${receipt.improvement} transfers</dd></div><div><dt>Live route</dt><dd>${receipt.live_route_unchanged ? 'Unchanged' : 'Changed'}</dd></div></dl>`,
+      };
+    },
+    rerun: async () => {
+      const validated = D.hypotheses.find((item) => item.state === 'validated');
+      const receipt = await api.rerunGhostTest(validated.realId);
+      const test = receipt.test_result;
+      state.consoleResult = {
+        scope: 'tests',
+        ok: Boolean(test.rerun_passed),
+        title: `Rerun ${validated.id} on the current route`,
+        body: `<dl><div><dt>Route used</dt><dd>${pretty(receipt.route_used)}</dd></div><div><dt>Reproduced</dt><dd>${test.reproduced}/${test.runs}</dd></div><div><dt>Verification</dt><dd>${test.rerun_passed ? 'Passed — failure no longer reproduces' : 'Failed — failure still reproduces'}</dd></div></dl>`,
+      };
+    },
+    remediation: async () => {
+      const session = auth.get('engineer') || auth.get('customer_dispute');
+      state.remediation = await api.remediation(D.incident.id, session.token);
+    },
+  };
+  await runBusy(action, actions[action], (error) => (error.status === 409 ? error.message : `${pretty(action)} failed: ${error.message}`));
+}
+
+// Compare the live Bank X route against the alternative: Gateway C before the reroute, Gateway B after.
+function twinTarget() {
+  const applied = [...store.run.resolutions].reverse().find((item) => item.action === 'apply_approved_reroute' && item.status === 'applied');
+  const route = applied?.detail?.to_route?.split('.')[0] || live.routes?.BANK_X;
+  return route === 'gateway_c' ? 'gateway_b' : 'gateway_c';
+}
+
+async function authAction(kind, role) {
+  if (kind === 'signout') {
+    auth.clear(role);
+    render();
+    return;
+  }
+  if (kind === 'paste') {
+    state.tokenFormRole = state.tokenFormRole === role ? null : role;
+    render();
+    document.querySelector('[data-token-form] input')?.focus();
+    return;
+  }
+  await runBusy('signin', async () => {
+    try {
+      const session = await auth.signIn(role);
+      showToast(`Signed in as ${session.sub}.`);
+    } catch (error) {
+      if (error.status === 404) {
+        state.tokenFormRole = role;
+        throw new Error('This API does not issue development tokens. Paste a token from your identity provider.');
+      }
+      throw error;
+    }
+  });
+}
+
+function exportAuditTrail() {
+  const payload = { exported_at: new Date().toISOString(), source: isLive() ? apiBase : 'recorded fixture', incident: D.incident, timeline: D.timeline, approvals: D.approvals.map(({ payload, ...item }) => item) };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
+  const link = Object.assign(document.createElement('a'), { href: url, download: `avera-audit-${D.incident.id || 'trail'}.json` });
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// One delegated listener per event type: elements survive DOM patching, so per-render
+// listeners would pile up.
 function bindEvents() {
-  document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigate(button.dataset.view)));
-  document.querySelectorAll('[data-approval]').forEach((button) => button.addEventListener('click', () => { state.activeApproval = button.dataset.approval; render(); }));
-  document.querySelectorAll('[data-decision]').forEach((button) => button.addEventListener('click', () => decide(button.dataset.decision)));
-  document.querySelectorAll('[data-step]').forEach((button) => button.addEventListener('click', () => setStep(Number(button.dataset.step))));
-  document.querySelector('.topbar [data-action="demo-panel"]')?.addEventListener('click', () => setDemoOpen(!state.demoOpen));
-  document.querySelector('.demo-panel [data-action="demo-panel"]')?.addEventListener('click', () => setDemoOpen(false));
-  document.querySelectorAll('[data-action="play"]').forEach((button) => button.addEventListener('click', () => togglePlay(Boolean(button.closest('.demo-panel')))));
-  document.querySelector('[data-action="next"]')?.addEventListener('click', () => setStep(state.demoStep + 1));
-  document.querySelector('[data-action="reset"]')?.addEventListener('click', () => { state.playing = false; clearInterval(playTimer); setStep(0); });
-  document.querySelector('[data-action="theme"]')?.addEventListener('click', () => { state.theme = state.theme === 'light' ? 'dark' : 'light'; render(); });
-  document.querySelector('[data-map-action="focus"]')?.addEventListener('click', () => serviceMap?.focusSuspect());
-  document.querySelector('[data-map-action="fullscreen"]')?.addEventListener('click', () => setMapFullscreen(!state.mapFullscreen));
-  document.querySelectorAll('[data-map-action="reset"]').forEach((button) => button.addEventListener('click', () => serviceMap?.resetView()));
-  document.querySelector('#memory-query')?.addEventListener('input', (event) => {
+  app.addEventListener('click', (event) => {
+    const hit = (selector) => event.target.closest(selector);
+    let el;
+    if ((el = hit('[data-view]'))) return navigate(el.dataset.view);
+    if ((el = hit('[data-approval]'))) { state.activeApproval = el.dataset.approval; state.tokenFormRole = null; return render(); }
+    if ((el = hit('[data-decision]'))) return decide(el.dataset.decision);
+    if ((el = hit('[data-step]'))) return setStep(Number(el.dataset.step));
+    if ((el = hit('[data-live]'))) return liveAction(el.dataset.live, el);
+    if ((el = hit('[data-auth]'))) return authAction(el.dataset.auth, el.dataset.role);
+    if ((el = hit('[data-map-action]'))) {
+      const action = el.dataset.mapAction;
+      if (action === 'focus') return serviceMap?.focusSuspect();
+      if (action === 'fullscreen') return setMapFullscreen(!state.mapFullscreen);
+      if (action === 'reset') return serviceMap?.resetView();
+    }
+    if (!(el = hit('[data-action]'))) return undefined;
+    const action = el.dataset.action;
+    if (action === 'reconnect') return connect();
+    if (action === 'export') return exportAuditTrail();
+    if (action === 'open-chat') return chat.open();
+    if (action === 'dismiss-console') { state.consoleResult = null; return render(); }
+    if (action === 'demo-panel') return setDemoOpen(el.closest('.demo-panel') ? false : !state.demoOpen);
+    if (action === 'play') return togglePlay(Boolean(el.closest('.demo-panel')));
+    if (action === 'next') return setStep(state.demoStep + 1);
+    if (action === 'reset' && el.closest('.demo-panel')) { state.playing = false; clearInterval(playTimer); return setStep(0); }
+    if (action === 'theme') { state.theme = state.theme === 'light' ? 'dark' : 'light'; return render(); }
+    return undefined;
+  });
+
+  app.addEventListener('submit', (event) => {
+    const form = event.target;
+    if (form.matches('[data-token-form]')) {
+      event.preventDefault();
+      try {
+        const session = auth.set(new FormData(form).get('token'));
+        state.tokenFormRole = null;
+        showToast(`Token accepted for ${session.sub} (${pretty(session.role)}).`);
+        form.reset();
+        document.activeElement?.blur();
+        render();
+      } catch (error) {
+        showToast(error.message, 'bad');
+      }
+    }
+    if (form.matches('[data-complaint-form]')) {
+      event.preventDefault();
+      const text = String(new FormData(form).get('text') || '').trim();
+      if (!text) return;
+      form.reset();
+      document.activeElement?.blur();
+      runBusy('complaint', async () => {
+        await api.ingest('command-centre', 'complaint', { id: `cmp-ui-${Date.now()}`, ts: new Date().toISOString(), channel: 'support', raw_text: text });
+        showToast('Customer report sent. Avera is re-investigating.');
+      });
+    }
+  });
+
+  app.addEventListener('input', (event) => {
+    if (event.target.id !== 'memory-query') return;
     state.memoryQuery = event.target.value;
     window.clearTimeout(event.target._timer);
-    event.target._timer = window.setTimeout(() => {
-      render();
-      const input = document.querySelector('#memory-query');
-      input?.focus();
-      input?.setSelectionRange(input.value.length, input.value.length);
-    }, 180);
+    event.target._timer = window.setTimeout(() => render(), 180);
   });
 }
 
@@ -621,10 +1184,7 @@ function setMapFullscreen(on) {
   if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
   if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
   const button = document.querySelector('[data-map-action="fullscreen"]');
-  if (button) {
-    button.outerHTML = fullscreenButton();
-    document.querySelector('[data-map-action="fullscreen"]').addEventListener('click', () => setMapFullscreen(!state.mapFullscreen));
-  }
+  if (button) button.outerHTML = fullscreenButton();
 }
 
 document.addEventListener('fullscreenchange', () => {
@@ -639,7 +1199,104 @@ document.addEventListener('keydown', (event) => {
   if (key === 'escape' && state.mapFullscreen) setMapFullscreen(false);
 });
 
+// Live updates patch the page at most every 250 ms; typed input is preserved by the DOM patcher.
+function liveRender() {
+  if (state.loading || navigating) return;
+  render();
+}
+
+store.subscribe(() => {
+  lastRecordAt = Date.now();
+  liveRender();
+});
+
+// Records stamped before this page connected are history: show their outcome at once.
+// Only progress happening now is paced through visible handoffs.
+let connectedAt = Date.now();
+let catchingUp = true;
+function noteRecord(record) {
+  if (catchingUp && Date.parse(record.occurred_at) >= connectedAt - 15000) {
+    catchingUp = false;
+    director.sync(store.step());
+  }
+}
+
+
+let lastRecordAt = 0;
+let streamOpenedAt = 0;
+// Fallback: if the stream goes quiet, history is done even if every record was old.
+window.setInterval(() => {
+  if (!isLive() || !catchingUp || !streamOpenedAt) return;
+  if (Date.now() - Math.max(lastRecordAt, streamOpenedAt) > 1500) {
+    catchingUp = false;
+    director.sync(store.step());
+    render();
+  }
+}, 300);
+
+director.start(() => ({ D: liveModel(), step: isLive() ? store.step() : state.demoStep, ctx: agentContext(), paced: isLive() && !catchingUp, quiet: isLive() && catchingUp }));
+director.subscribe((kind) => {
+  if (kind === 'step' || kind === 'beat') liveRender();
+});
+const chat = createChat({ director, context: () => ({ D: liveModel(), step: currentStep(), ctx: agentContext() }) });
+window.setInterval(tickClocks, 1000);
+
+async function refreshHealth() {
+  try {
+    const [health, map] = await Promise.all([api.health(), api.serviceMap()]);
+    live.health = health;
+    live.routes = map.routes;
+    return true;
+  } catch (error) {
+    live.error = error.message;
+    return false;
+  }
+}
+
+async function connect() {
+  if (params.get('mode') === 'fixture') return;
+  window.clearTimeout(live.retry);
+  live.mode = 'connecting';
+  liveRender();
+  if (!(await refreshHealth())) {
+    live.mode = 'fixture';
+    liveRender();
+    live.retry = window.setTimeout(connect, 20000);
+    return;
+  }
+  live.mode = 'live';
+  live.error = null;
+  connectedAt = Date.now();
+  catchingUp = true;
+  live.closeStream?.();
+  live.closeStream = openStream({
+    after: store.lastSequence,
+    onRecord: (record) => {
+      store.ingest(record);
+      noteRecord(record);
+    },
+    onOpen: () => { live.stream = 'open'; streamOpenedAt ||= Date.now(); liveRender(); },
+    onError: () => { live.stream = 'reconnecting'; liveRender(); },
+  });
+  liveRender();
+}
+
+// Health and routes change on their own (reroutes, model state). Poll every 3 s while an
+// incident is moving so the agents report the backend's real investigation state, else every 9 s.
+let healthTicks = 0;
+window.setInterval(async () => {
+  healthTicks += 1;
+  if (!isLive() || document.hidden) return;
+  const active = store.run.started && store.step() < 6;
+  if (!active && healthTicks % 3 !== 0) return;
+  const before = JSON.stringify([live.health?.observability, live.health?.remediation, live.routes]);
+  await refreshHealth();
+  if (before !== JSON.stringify([live.health?.observability, live.health?.remediation, live.routes])) liveRender();
+}, 3000);
+
+bindEvents();
 render();
+connect();
 window.setTimeout(() => {
   state.loading = false;
   render();

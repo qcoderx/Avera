@@ -676,25 +676,81 @@ export class ServiceMap {
       return texture;
     };
     const shadowTexture = radialTexture([[0, 0.5], [0.5, 0.22], [1, 0]]);
-    const make = (agent, modes) => {
-      const frames = Object.fromEntries(Object.entries(modes).map(([mode, list]) => [mode, list.map((frame) => load(agent, frame))]));
-      const material = new THREE.SpriteMaterial({ map: Object.values(frames)[0][0], transparent: true, depthWrite: false });
+    const colors = { observability: '#1EA896', ghost: '#8178D8', blast: '#F2A65A', resolution: '#FF715B' };
+    const names = { observability: 'Observability', ghost: 'Ghost Test', blast: 'Blast Radius', resolution: 'Resolution' };
+    // Each agent stands at its own post on the open front edge of the board, clear of the labels.
+    const front = this.bounds.maxZ - 1.3;
+    const posts = {
+      observability: new THREE.Vector3(-11.8, 0, front),
+      ghost: new THREE.Vector3(3.9, 0, front),
+      resolution: new THREE.Vector3(11.8, 0, front),
+      blast: new THREE.Vector3(this.field.centerX + 5.4, 0, this.field.radius + 2.6),
+    };
+    const make = (agent) => {
+      const frames = {
+        listening: ['listen-a', 'listen-b'].map((frame) => load(agent, frame)),
+        working: ['work-a', 'work-b'].map((frame) => load(agent, frame)),
+        result: ['result'].map((frame) => load(agent, frame)),
+      };
+      const material = new THREE.SpriteMaterial({ map: frames.listening[0], transparent: true, depthWrite: false, depthTest: false });
       const sprite = new THREE.Sprite(material);
       sprite.center.set(0.5, 0.05);
+      sprite.renderOrder = 10;
       sprite.scale.setScalar(0.001);
-      const shadow = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.8), new THREE.MeshBasicMaterial({ color: '#523f38', map: shadowTexture, transparent: true, opacity: 0, depthWrite: false }));
+      const shadow = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.95), new THREE.MeshBasicMaterial({ color: '#523f38', map: shadowTexture, transparent: true, opacity: 0, depthWrite: false }));
       shadow.rotation.x = -Math.PI / 2;
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 48), new THREE.MeshBasicMaterial({ color: colors[agent], transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.03;
+      const bubble = label('agent-bubble', `<div class="map3d-card"><b>${names[agent]}</b><span></span></div>`, [0.5, 1]);
+      bubble.element.style.setProperty('--agent', colors[agent]);
       const group = new THREE.Group();
-      group.add(sprite, shadow);
+      group.add(sprite, shadow, ring, bubble);
+      group.position.copy(posts[agent]);
       this.scene.add(group);
-      return { agent, frames, mode: Object.keys(modes)[0], sprite, material, shadow, group, size: 0, visible: false };
+      return { agent, frames, mode: 'listening', sprite, material, shadow, ring, bubble, group, post: posts[agent], spot: posts[agent], size: 0, active: false, text: '', headline: '', said: 0, pending: null };
     };
-    this.mascots = {
-      observability: make('observability', { listening: ['listen-a', 'listen-b'], working: ['work-a', 'work-b'], result: ['result'] }),
-      ghost: make('ghost', { working: ['work-a', 'work-b'], result: ['result'] }),
-      blast: make('blast', { working: ['work-a', 'work-b'], result: ['result'] }),
-      resolution: make('resolution', { listening: ['listen-a', 'listen-b'], result: ['result'] }),
+    // Where each agent walks while it is working: right next to the problem it owns.
+    const bug = this.edges.get('gb>bankx').curve;
+    const reroute = this.edges.get('gc>bankx').curve;
+    this.agentSpots = {
+      observability: { steps: [1, 2], at: bug.getPointAt(0.32).setY(0).add(new THREE.Vector3(0, 0, -1.7)) },
+      blast: { steps: [4], at: new THREE.Vector3(this.field.centerX + this.field.radius + 1.4, 0, this.field.radius * 0.45) },
+      resolution: { steps: [5], at: reroute.getPointAt(0.5).setY(0).add(new THREE.Vector3(1.6, 0, 1.3)) },
     };
+    this.mascots = Object.fromEntries(Object.keys(posts).map((agent) => [agent, make(agent)]));
+    Object.values(this.mascots).forEach((mascot, index) => gsap.to(mascot, { size: 1, duration: reducedMotion ? 0 : 0.8, delay: reducedMotion ? 0 : 0.4 + index * 0.12, ease: 'back.out(2.2)' }));
+  }
+
+  // Live agent activity from the app: mode, who is on point, and what each one is saying.
+  setAgents(statuses, lines) {
+    if (!this.mascots) return;
+    Object.entries(this.mascots).forEach(([id, mascot]) => {
+      const status = statuses?.[id];
+      if (!status) return;
+      mascot.mode = { working: 'working', done: 'result' }[status.mode] || 'listening';
+      mascot.idle = status.mode === 'idle';
+      mascot.active = Boolean(status.active);
+      const el = mascot.bubble.element;
+      el.classList.toggle('active', mascot.active);
+      el.classList.toggle('idle', mascot.idle);
+      el.dataset.mode = status.mode;
+      mascot.pending = { headline: status.headline, text: lines?.[id] || status.lines[0] };
+      // A new state (headline) shows at once; chatter within a state changes at most every 7 seconds.
+      if (status.headline !== mascot.headline) this.sayBubble(mascot);
+    });
+  }
+
+  sayBubble(mascot) {
+    const { headline, text } = mascot.pending;
+    mascot.pending = null;
+    mascot.said = performance.now();
+    if (headline === mascot.headline && text === mascot.text) return;
+    const el = mascot.bubble.element;
+    if (headline !== mascot.headline) el.querySelector('b').textContent = `${{ observability: 'Observability', ghost: 'Ghost Test', blast: 'Blast Radius', resolution: 'Resolution' }[mascot.agent]} · ${headline}`;
+    if (text !== mascot.text) el.querySelector('span').textContent = text;
+    mascot.headline = headline;
+    mascot.text = text;
   }
 
   // Every 3D label the declutter pass may move, with how much it matters when space runs out.
@@ -706,6 +762,7 @@ export class ServiceMap {
       item(this.bugMarker.element, 'marker', 100, () => state().bug !== 'hidden' && !state().twin),
       item(this.lock.element, 'marker', 98, () => state().lock !== 'hidden'),
       item(this.crowdLabel.element, 'marker', 95),
+      ...Object.values(this.mascots).map((mascot) => ({ ...item(mascot.bubble.element, 'marker', 0), upOnly: true, priorityOf: () => (mascot.active ? 99 : 94) })),
       ...this.twinLabels.map((twinLabel) => item(twinLabel.element, 'marker', 92, () => state().twin)),
       ...[...this.nodes.values()].map((node) => ({ ...item(node.el, 'node', 0, () => !node.offscreen && !state().twin), node })),
       item(this.release.element, 'badge', 40, () => state().release && !state().twin),
@@ -726,6 +783,18 @@ export class ServiceMap {
       const placed = [];
       const pad = 5;
       const frame = this.host.getBoundingClientRect();
+      // The agents themselves are obstacles: no label, their own bubbles included, may sit on top of one.
+      Object.values(this.mascots).forEach((mascot) => {
+        if (mascot.size < 0.2) return;
+        const scale = mascot.sprite.scale.y;
+        const foot = this.tmpPos.copy(mascot.sprite.position).applyMatrix4(mascot.group.matrixWorld).project(this.camera);
+        const footX = frame.left + (foot.x + 1) / 2 * frame.width;
+        const footY = frame.top + (1 - foot.y) / 2 * frame.height;
+        const head = this.tmpPos.copy(mascot.sprite.position).setY(mascot.sprite.position.y + scale * 0.92).applyMatrix4(mascot.group.matrixWorld).project(this.camera);
+        const headY = frame.top + (1 - head.y) / 2 * frame.height;
+        const half = Math.max(8, (footY - headY) * 0.36);
+        placed.push({ left: footX - half, right: footX + half, top: headY, bottom: footY });
+      });
       const outside = (box) => Math.max(0, frame.left + 4 - box.left) + Math.max(0, box.right - frame.right + 4) + Math.max(0, frame.top + 4 - box.top) + Math.max(0, box.bottom - frame.bottom + 4);
       const hits = (box) => placed.reduce((sum, other) => {
         const w = Math.min(box.right, other.right) - Math.max(box.left, other.left) + pad;
@@ -741,9 +810,9 @@ export class ServiceMap {
         const rect = entry.el.getBoundingClientRect();
         if (!rect.width || !rect.height) return;
         const base = { left: rect.left - entry.offset.x, top: rect.top - entry.offset.y, width: rect.width, height: rect.height };
-        const candidates = [entry.target, { x: 0, y: 0 }];
-        const steps = entry.kind === 'node' ? [-12, -24, -36, -48, -62, -78, -96, -116, -140, 16, 32, 48] : [-14, 14, -28, 28, -44, 44, -62, 62, -84, 84];
-        const sideways = entry.kind === 'node' ? [0, -40, 40, -80, 80] : [0, -60, 60];
+        const candidates = [entry.upOnly && entry.target.y > 0 ? { x: 0, y: 0 } : entry.target, { x: 0, y: 0 }];
+        const steps = entry.kind === 'node' ? [-12, -24, -36, -48, -62, -78, -96, -116, -140, 16, 32, 48] : entry.upOnly ? [-14, -28, -44, -62, -84, -110] : [-14, 14, -28, 28, -44, 44, -62, 62, -84, 84];
+        const sideways = entry.kind === 'node' ? [0, -40, 40, -80, 80] : entry.upOnly ? [0, -70, 70, -140, 140] : [0, -60, 60];
         sideways.forEach((x) => steps.forEach((y) => candidates.push({ x, y })));
         if (entry.kind === 'node') sideways.slice(1).forEach((x) => candidates.splice(2, 0, { x, y: 0 }));
         let best = null;
@@ -963,8 +1032,13 @@ export class ServiceMap {
     this.edgeMat.color.set(t.edge);
   }
 
-  setStep(step) {
-    if (step === this.step) return;
+  // Live data replaces the recorded fixture's numbers, hypotheses and approvals.
+  setData(data) {
+    this.fixture = { ...this.fixture, hypotheses: data.hypotheses, impact: data.impact, approvals: data.approvals, mapStates: data.mapStates, incident: data.incident, times: data.times };
+  }
+
+  setStep(step, force = false) {
+    if (step === this.step && !force) return;
     const state = this.fixture.mapStates[step];
     this.step = step;
     this.state = state;
@@ -1012,6 +1086,7 @@ export class ServiceMap {
     this.renderBug(state.bug);
     this.renderLock(state.lock);
     this.release.element.classList.toggle('visible', state.release);
+    this.release.element.querySelector('.map3d-card').innerHTML = `<b>App v4.2</b> released at ${this.fixture.times?.release || '10:42'}`;
     this.placeMascots(step);
   }
 
@@ -1021,12 +1096,12 @@ export class ServiceMap {
       el.hidden = true;
       return;
     }
-    const data = this.fixture.hypotheses.find((item) => item.id === hypothesis.id);
+    const data = this.fixture.hypotheses.find((item) => item.id === hypothesis.id) || {};
     const score = hypothesis.score ?? (hypothesis.state === 'testing' ? 55 : 0);
     const value = hypothesis.state === 'open' ? 'open' : hypothesis.state === 'testing' ? 'testing' : `${hypothesis.score}%`;
     el.hidden = false;
     el.className = `map3d-hyp hyp-${hypothesis.state}`;
-    el.innerHTML = `<div><b>${hypothesis.id}</b><span>${data.short}</span></div><div><i><u style="width:${score}%"></u><s></s></i><em>${hypothesis.state === 'proven' ? '✓ ' : hypothesis.state === 'ruled' ? '✕ ' : ''}${value}</em></div>`;
+    el.innerHTML = `<div><b>${hypothesis.id}</b><span>${hypothesis.short || data.short || ''}</span></div><div><i><u style="width:${score}%"></u><s></s></i><em>${hypothesis.state === 'proven' ? '✓ ' : hypothesis.state === 'ruled' ? '✕ ' : ''}${value}</em></div>`;
   }
 
   renderCrowdLabel(customers) {
@@ -1036,7 +1111,7 @@ export class ServiceMap {
     const counts = customers.affected >= 1 || customers.notified
       ? `<div class="crowd-counts"><span><b class="wine">${format.format(complained)}</b> complained</span><span><b>${format.format(affected - complained)}</b> never did</span></div>`
       : '';
-    this.crowdLabel.element.innerHTML = `<div class="map3d-card"><small>${format.format(affected)} customers sending to Bank X</small><strong>${customers.caption}</strong><span>${customers.detail}</span>${counts}</div>`;
+    this.crowdLabel.element.innerHTML = `<div class="map3d-card"><small>${affected ? `${format.format(affected)} customers` : 'Customers'} sending to Bank X</small><strong>${customers.caption}</strong><span>${customers.detail}</span>${counts}</div>`;
   }
 
   renderBug(mode) {
@@ -1044,7 +1119,7 @@ export class ServiceMap {
     el.className = `map3d-bug bug-${mode}`;
     const copy = {
       hidden: '',
-      silent: `<div class="map3d-card"><b>Acks stopped · 10:42</b><span>No alert fired. Nobody knows yet.</span></div>`,
+      silent: `<div class="map3d-card"><b>Acks stopped · ${this.fixture.times?.failure || '10:42'}</b><span>No alert fired. Nobody knows yet.</span></div>`,
       alert: `<div class="map3d-card">${WARN_ICON}<div><b>ACK TIMEOUT</b><span>Gateway B → Bank X · debits with no credit</span></div></div>`,
       bypassed: `<div class="map3d-card"><b>Bypassed</b><span>Bank X now routes via Gateway C</span></div>`,
     }[mode];
@@ -1054,36 +1129,24 @@ export class ServiceMap {
   renderLock(mode) {
     const el = this.lock.element;
     el.className = `map3d-lock lock-${mode}`;
-    const approval = this.fixture.approvals.find((item) => item.kind === 'Routing change');
+    const approval = this.fixture.approvals.find((item) => item.kind === 'Routing change') || { id: 'Reroute' };
     el.innerHTML = mode === 'hidden' ? '' : mode === 'pending'
       ? `<div class="map3d-card">${LOCK_ICON}<div><b>Awaiting engineer approval</b><span>${approval.id} · reroute to Gateway C</span></div></div>`
       : `<div class="map3d-card">${UNLOCK_ICON}<div><b>Approved and applied</b><span>${approval.id} · Ghost Tests rerun green</span></div></div>`;
   }
 
+  // Working agents walk to the problem they own; everyone else, and everyone once done, goes back to their post.
   placeMascots(step) {
-    const at = (id, offset) => this.nodes.get(id).home.clone().add(offset);
-    const plan = {
-      observability: step <= 2 ? { mode: step === 2 ? 'working' : 'listening', pos: step === 2 ? at('router', new THREE.Vector3(2.2, 0, -2.6)) : at('api', new THREE.Vector3(1.9, 0, -1.6)) } : null,
-      ghost: step === 3 ? { mode: 'working', ride: true } : null,
-      blast: step === 4 || step === 5 ? { mode: step === 4 ? 'working' : 'result', pos: at('bankx', new THREE.Vector3(-0.2, 0, -2.3)) } : null,
-      resolution: step >= 5 ? { mode: step === 5 ? 'listening' : 'result', pos: at('gc', new THREE.Vector3(1.6, 0, 1.3)) } : null,
-    };
     Object.entries(this.mascots).forEach(([id, mascot]) => {
-      const next = plan[id];
-      const duration = reducedMotion ? 0 : 0.7;
-      if (!next) {
-        if (mascot.visible) gsap.to(mascot, { size: 0, duration: duration * 0.6, ease: 'back.in(2)' });
-        mascot.visible = false;
-        return;
+      const ride = id === 'ghost' && step === 3;
+      const spot = this.agentSpots[id]?.steps.includes(step) ? this.agentSpots[id].at : mascot.post;
+      if (!ride && (mascot.ride || spot !== mascot.spot)) {
+        mascot.walk?.kill();
+        mascot.walk = gsap.to(mascot.group.position, { x: spot.x, y: 0, z: spot.z, duration: reducedMotion ? 0 : 1.8, ease: 'power2.inOut' });
       }
-      mascot.mode = next.mode;
-      mascot.ride = Boolean(next.ride);
-      if (next.pos) {
-        if (!mascot.visible) mascot.group.position.copy(next.pos);
-        else gsap.to(mascot.group.position, { x: next.pos.x, y: next.pos.y, z: next.pos.z, duration: 1.4, ease: 'power3.inOut' });
-      }
-      if (!mascot.visible) gsap.to(mascot, { size: 1, duration, delay: 0.25, ease: 'back.out(2.4)' });
-      mascot.visible = true;
+      mascot.spot = spot;
+      mascot.ride = ride;
+      if (ride) mascot.walk?.kill();
     });
   }
 
@@ -1370,25 +1433,34 @@ export class ServiceMap {
   }
 
   updateMascots(dt, time) {
+    const now = performance.now();
     Object.values(this.mascots).forEach((mascot) => {
-      const frames = mascot.frames[mascot.mode] || Object.values(mascot.frames)[0];
-      const frame = frames[Math.floor(time / (mascot.mode === 'working' ? 0.42 : 0.7)) % frames.length];
+      if (mascot.pending && now - mascot.said >= 7000) this.sayBubble(mascot);
+      const frames = mascot.frames[mascot.mode] || mascot.frames.listening;
+      const period = mascot.mode === 'working' ? 0.42 : mascot.idle ? 1.4 : 0.8;
+      const frame = frames[Math.floor(time / period) % frames.length];
       if (mascot.material.map !== frame) mascot.material.map = frame;
+      const scale = mascot.size * (mascot.active ? 3.4 : 2.6);
       if (mascot.ride) {
         const route = [this.edges.get('~router>~gb'), this.edges.get('~gb>~bankx')];
-        const loop = (time * 0.12) % 2;
+        const loop = (time * 0.06) % 2;
         const point = route[Math.floor(loop)].curve.getPointAt(loop % 1);
         this.tmpPos.copy(point).setY(0);
         mascot.group.position.lerp(this.tmpPos, Math.min(1, dt * 6));
         mascot.sprite.position.y = point.y + this.twin.position.y + 0.12;
         mascot.shadow.position.y = TWIN_LIFT + this.twin.position.y - 0.02;
       } else {
-        mascot.sprite.position.y = 0.05 + (mascot.mode === 'result' ? Math.abs(Math.sin(time * 2.4)) * 0.24 : Math.sin(time * 1.8) * 0.06);
+        const hop = mascot.mode === 'result' ? Math.abs(Math.sin(time * 2.4)) * 0.3 : mascot.mode === 'working' ? Math.abs(Math.sin(time * 6)) * 0.08 : Math.sin(time * 1.8) * 0.06;
+        mascot.sprite.position.y = 0.05 + hop;
         mascot.shadow.position.y = 0.02;
       }
-      mascot.sprite.scale.setScalar(Math.max(0.0001, mascot.size * 2.1));
-      mascot.shadow.scale.setScalar(Math.max(0.0001, mascot.size));
+      mascot.material.opacity = mascot.idle ? 0.75 : 1;
+      mascot.sprite.scale.setScalar(Math.max(0.0001, scale));
+      mascot.shadow.scale.setScalar(Math.max(0.0001, mascot.size * (mascot.active ? 1.3 : 1)));
       mascot.shadow.material.opacity = mascot.size * 0.55;
+      mascot.ring.material.opacity = mascot.active && !mascot.ride ? 0.55 + Math.sin(time * 3) * 0.25 : 0;
+      mascot.ring.scale.setScalar(1.1 + Math.sin(time * 3) * 0.08);
+      mascot.bubble.position.y = mascot.sprite.position.y + scale * 0.98;
     });
   }
 }

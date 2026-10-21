@@ -36,6 +36,12 @@ npm run dev
 
 Open `http://localhost:5173`.
 
+### Live API
+
+The frontend talks to the deployed API at `https://api.avera.clippit.click` by default: the Vite dev and preview servers proxy `/api/*` to it, so the browser stays same-origin. To use a local backend instead, set `AVERA_API_PROXY_TARGET=http://127.0.0.1:8766` in `frontend/.env`. A build hosted on another origin can call the API directly with `VITE_AVERA_API_BASE`, provided the API lists that origin in `AVERA_CORS_ORIGINS`.
+
+Every page renders the live `/stream`: incident, hypotheses, Ghost Test results, blast radius, fix plan, approvals and resolution events. The demo controller (`D`) starts a baseline, injects the failure, resets, investigates or replays the recorded stream. Approvals need a signed approver JWT for the required role. Locally, **Sign in** uses `/dev/auth/token` when `AVERA_DEV_AUTH_ENABLED=true`. Against the deployed API, paste a token from your identity provider. If the API is unreachable, the command centre falls back to the recorded fixture and retries the connection. Add `?mode=fixture` to force the recorded story.
+
 Build the frontend for production:
 
 ```bash
@@ -43,7 +49,7 @@ cd frontend
 npm run build
 ```
 
-The command centre includes incident health and feed, service map, hypotheses and Ghost Test runs, customer impact, fix plan, approvals, timeline, and institutional memory. The service map is a Three.js story stage driven by the demo step. It shows the 1,109 affected customers as a crowd that turns coral as transfers fail silently, with the 13 complainers raised. The broken Gateway B acknowledgement is called out on the link itself, and hypothesis chips carry live confidence bars. A digital twin rises above the board while Ghost Tests run, and the reroute arc is locked until an engineer approves. A story bar, agent pipeline and clickable timeline narrate each moment,. The view is square to the board and only moves when you drag, scroll or use the zoom buttons. It falls back to the flat map when WebGL is unavailable. Add `?view=map&step=3` to the URL to open a specific view and step. The hidden demo controller opens from the header or with the `D` key and can replay the local fixture story.
+The command centre includes incident health and feed, service map, hypotheses and Ghost Test runs, customer impact, fix plan, approvals, timeline, and institutional memory. The service map is a Three.js story stage driven by the demo step. It shows the 1,109 affected customers as a crowd that turns coral as transfers fail silently, with the 13 complainers raised. The broken Gateway B acknowledgement is called out on the link itself, and hypothesis chips carry live confidence bars. A digital twin rises above the board while Ghost Tests run, and the reroute arc is locked until an engineer approves. A story bar, agent pipeline and timeline narrate each moment. The view is square to the board and only moves when you drag, scroll or use the zoom buttons. It falls back to the flat map when WebGL is unavailable. Add `?view=map&step=3` to the URL to open a specific view and step. The demo controller opens from the header or with the `D` key.
 
 Run the backend regression suite, including the integrated observability/remediation path:
 
