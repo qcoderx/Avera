@@ -13,6 +13,7 @@ async function request(path, method = 'GET', body) {
 
 export const bankApi = {
   state: () => request('/state'),
+  reset: () => request('/reset', 'POST'),
   transfer: (amount_ngn) => request('/transfer', 'POST', { amount_ngn }),
   report: (complaint) => request('/report', 'POST', { complaint }),
 };

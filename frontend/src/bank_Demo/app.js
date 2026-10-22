@@ -21,6 +21,7 @@ const paths = {
   help: '<circle cx="12" cy="12" r="9"/><path d="M9.6 9a2.5 2.5 0 1 1 3.3 2.4c-.9.4-.9 1-.9 1.6M12 17h.01"/>',
   home: '<path d="m3 11 9-8 9 8M5 10v10h14V10M9 20v-6h6v6"/>', phone: '<rect x="7" y="2" width="10" height="20" rx="3"/><path d="M11 18h2"/>',
   receipt: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"/>', send: '<path d="m3 11 18-8-8 18-2-8zM11 13 21 3"/>',
+  reset: '<path d="M20 7v5h-5"/><path d="M18.2 16.4A8 8 0 1 1 20 12"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   wallet: '<path d="M4 6h14a2 2 0 0 1 2 2v11H4a2 2 0 0 1-2-2V6a3 3 0 0 1 3-3h12v3M15 11h7v5h-7a2.5 2.5 0 0 1 0-5z"/>',
 };
@@ -63,7 +64,7 @@ function bottomNav(active) {
 }
 
 function homeScreen() {
-  return `<div class="mobile-view home-view"><header class="mobile-header"><a class="mobile-brand" href="/bank" aria-label="Avera home"><span>A</span><strong>Avera</strong></a><div class="header-actions"><button aria-label="Notifications">${icon('bell', 19)}<i></i></button><button class="avatar" aria-label="Profile">AO</button></div></header><main class="mobile-content">
+  return `<div class="mobile-view home-view"><header class="mobile-header"><a class="mobile-brand" href="/bank" aria-label="Avera home"><span>A</span><strong>Avera</strong></a><div class="header-actions"><button class="reset-demo" data-action="reset" aria-label="Reset demo bank" title="Reset demo bank" ${busy ? 'disabled' : ''}>${icon('reset', 15)}<span>${busy ? 'Resetting' : 'Reset'}</span></button><button aria-label="Notifications">${icon('bell', 19)}<i></i></button><button class="avatar" aria-label="Profile">AO</button></div></header><main class="mobile-content">
     <div class="welcome"><p>Good morning, Amara</p><h1>Here’s your money.</h1></div>
     <section class="account-card"><div class="account-top"><span>Available balance</span><button aria-label="Hide balance">${icon('eye', 17)}</button></div><strong>${naira(bank.account.available_ngn)}<sup>.00</sup></strong><small>Everyday account · ${escapeHtml(bank.account.account_number)}</small><div class="card-rings"></div></section>
     <div class="quick-actions"><button data-action="transfer"><span>${icon('send', 20)}</span><small>Send</small></button><button><span>${icon('phone', 20)}</span><small>Airtime</small></button><button><span>${icon('receipt', 20)}</span><small>Pay bills</small></button><button><span>${icon('card', 20)}</span><small>Cards</small></button></div>
@@ -131,6 +132,19 @@ async function submitReport(form) {
   finally { busy = false; render(); }
 }
 
+async function resetDemo() {
+  if (busy) return;
+  busy = true; render();
+  try {
+    bank = await bankApi.reset();
+    screen = 'home'; reportOpen = false; transferResult = null;
+    if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null; }
+    toast = 'Demo bank reset.';
+    window.setTimeout(() => { toast = null; render(); }, 2200);
+  } catch (error) { toast = error.message; }
+  finally { busy = false; render(); }
+}
+
 app.addEventListener('submit', (event) => {
   event.preventDefault();
   if (event.target.id === 'transfer-form') submitTransfer(event.target);
@@ -146,6 +160,7 @@ app.addEventListener('click', (event) => {
   if (action === 'open-report') { reportOpen = true; render(); }
   if (action === 'close-report' && (event.target === button || button.tagName === 'BUTTON')) { reportOpen = false; render(); }
   if (action === 'dismiss-result') { transferResult = null; screen = 'home'; render(); }
+  if (action === 'reset') resetDemo();
 });
 
 bankApi.state().then((state) => { bank = state; render(); if (isReviewing()) startPolling(); }).catch((error) => {
