@@ -262,6 +262,20 @@ export class LiveStore {
     if (run.firstFailureTs || run.complaints.length) return 1;
     return 0;
   }
+
+  reconcileApprovalIds(authoritativeIds) {
+    let changed = false;
+    for (const approvalId of this.run.approvals.keys()) {
+      if (!authoritativeIds.has(approvalId)) {
+        this.run.approvals.delete(approvalId);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.version += 1;
+      this.notify();
+    }
+  }
 }
 
 export function kindLabel(kind) {

@@ -8,14 +8,12 @@ import os
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
-from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-import jwt
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
@@ -45,7 +43,6 @@ from avera.simulation.bank import SimulatedBank
 from avera.observability.model import configured_model
 from avera.observability.orchestration import ObservabilityAgent
 from avera.observability.replay import replay_observations
-from avera.api.auth import current_approver
 from avera.api.observe import (
     OperationalLogHandler,
     OperationalLogStore,
@@ -54,9 +51,7 @@ from avera.api.observe import (
     remove_log_capture,
 )
 from avera.remediation.approvals.api import build_router as build_approval_router
-from avera.remediation.approvals import Approver
 from avera.remediation.integration import RemediationRuntime, build_runtime
-from avera.remediation.models import Role
 
 logger = logging.getLogger(__name__)
 
@@ -73,19 +68,6 @@ class IngestReceipt(BaseModel):
     record: dict[str, Any]
     created: bool
     delivery: str
-
-
-class DevAuthRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    role: Role
-
-
-class DevAuthTokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int
-    role: Role
 
 
 class ReplayReceipt(BaseModel):
@@ -195,6 +177,14 @@ def create_app(
         try:
             await repository.start()
             repository_started = True
+            restored_case_id = await restore_remediation_state()
+            if restored_case_id is not None:
+                operational_logs.append(
+                    "INFO",
+                    "avera.remediation",
+                    "Durable remediation state restored",
+                    kind="lifecycle",
+                )
             operational_logs.append(
                 "INFO",
                 "avera.infrastructure",
@@ -271,9 +261,9 @@ def create_app(
         app.add_middleware(
             CORSMiddleware,
             allow_origins=cors_origins,
-            allow_credentials=True,
+            allow_credentials=False,
             allow_methods=["GET", "POST", "OPTIONS"],
-            allow_headers=["Authorization", "Content-Type", "Last-Event-ID"],
+            allow_headers=["Content-Type", "Last-Event-ID"],
             expose_headers=[
                 "X-Avera-Request-ID",
                 "X-Avera-Sequence",
@@ -296,6 +286,24 @@ def create_app(
     app.state.remediation_runtime = remediation_runtime
     app.state.active_remediation_case_id = None
     app.state.remediation_error = None
+    remediation_state_lock = asyncio.Lock()
+
+    async def restore_remediation_state() -> str | None:
+        snapshot = await repository.load_runtime_state("remediation.v1")
+        if snapshot is None:
+            return None
+        active_case_id = remediation_runtime.restore(snapshot)
+        app.state.active_remediation_case_id = active_case_id
+        return active_case_id
+
+    async def persist_remediation_state() -> None:
+        async with remediation_state_lock:
+            snapshot = remediation_runtime.snapshot(app.state.active_remediation_case_id)
+            await repository.save_runtime_state("remediation.v1", snapshot)
+
+    async def after_approval_decision() -> None:
+        await remediation_runtime.flush_events(service)
+        await persist_remediation_state()
 
     @app.middleware("http")
     async def operational_request_log(request: Request, call_next):
@@ -353,6 +361,7 @@ def create_app(
             except Exception as exc:
                 app.state.remediation_error = f"handoff_failed:{type(exc).__name__}"
             await remediation_runtime.flush_events(service)
+            await persist_remediation_state()
             return result
 
     async def drain_investigation_requests():
@@ -431,50 +440,13 @@ def create_app(
 
     app.include_router(build_approval_router(
         remediation_runtime.remediation.approvals,
-        current_approver=current_approver,
-        after_decision=lambda: remediation_runtime.flush_events(service),
+        after_decision=after_approval_decision,
     ))
     app.include_router(build_observe_router(operational_logs, observe_status_snapshot))
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return await health_snapshot()
-
-    @app.post("/dev/auth/token", response_model=DevAuthTokenResponse)
-    async def issue_local_dev_token(
-        body: DevAuthRequest,
-        request: Request,
-        response: Response,
-    ) -> DevAuthTokenResponse:
-        """Issue a short-lived approver token for loopback-only local UI development."""
-        enabled = os.getenv("AVERA_DEV_AUTH_ENABLED", "").strip().casefold() in {"1", "true", "yes"}
-        environment = os.getenv("AVERA_ENVIRONMENT", "production").strip().casefold()
-        if not enabled or environment != "development":
-            raise HTTPException(status_code=404, detail="not found")
-
-        remote_host = request.client.host if request.client else ""
-        try:
-            if not ip_address(remote_host).is_loopback:
-                raise HTTPException(status_code=404, detail="not found")
-        except ValueError:
-            raise HTTPException(status_code=404, detail="not found") from None
-
-        secret = os.getenv("AVERA_APPROVER_JWT_SECRET", "")
-        if len(secret.encode("utf-8")) < 32:
-            raise HTTPException(status_code=503, detail="JWT verification is not configured")
-
-        now = int(time.time())
-        issuer = os.getenv("AVERA_APPROVER_JWT_ISSUER", "avera")
-        audience = os.getenv("AVERA_APPROVER_JWT_AUDIENCE", "avera-api")
-        subject = f"local-dev-{body.role.value}"
-        token = jwt.encode(
-            {"sub": subject, "role": body.role.value, "iss": issuer, "aud": audience,
-             "iat": now, "exp": now + 600},
-            secret,
-            algorithm="HS256",
-        )
-        response.headers["Cache-Control"] = "no-store"
-        return DevAuthTokenResponse(access_token=token, expires_in=600, role=body.role)
 
     @app.get("/service-map")
     async def service_map() -> dict[str, object]:
@@ -542,6 +514,7 @@ def create_app(
             case = remediation_runtime.remediation.on_validated(handoff)
             app.state.active_remediation_case_id = case.incident_id
         await remediation_runtime.flush_events(service)
+        await persist_remediation_state()
         return result
 
     @app.post("/ghost-test/rerun", response_model=RerunReceipt, status_code=202)
@@ -559,7 +532,7 @@ def create_app(
         return control_plane.twin.simulate(body)
 
     @app.get("/remediation/{incident_id}")
-    async def remediation_case(incident_id: str, _: Approver = Depends(current_approver)):
+    async def remediation_case(incident_id: str):
         case = remediation_runtime.remediation.store.get(incident_id)
         if case is None:
             raise HTTPException(status_code=404, detail="remediation case not found")
@@ -585,6 +558,7 @@ def create_app(
             remediation_runtime.world.bank.routes["BANK_X"] = "gateway_b.bank_x"
             remediation_runtime.world.bank.applied.clear()
             await remediation_runtime.flush_events(service)
+            await persist_remediation_state()
             await ghost_test_agent.reset()
             return await control_plane.start_demo()
 
@@ -611,6 +585,7 @@ def create_app(
             remediation_runtime.world.bank.routes["BANK_X"] = "gateway_b.bank_x"
             remediation_runtime.world.bank.applied.clear()
             await remediation_runtime.flush_events(service)
+            await persist_remediation_state()
             await ghost_test_agent.reset()
             return receipt
 

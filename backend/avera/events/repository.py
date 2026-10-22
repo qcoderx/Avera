@@ -35,6 +35,10 @@ class EventRepository(Protocol):
 
     async def outbox_status(self, sequence: int) -> str | None: ...
 
+    async def load_runtime_state(self, key: str) -> dict | None: ...
+
+    async def save_runtime_state(self, key: str, value: dict) -> None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class OutboxItem:
@@ -59,6 +63,7 @@ class InMemoryEventRepository:
         self._records: list[StreamRecord] = []
         self._by_key: dict[tuple[str, str, datetime], StreamRecord] = {}
         self._outbox: dict[int, dict[str, object]] = {}
+        self._runtime_state: dict[str, dict] = {}
 
     async def start(self) -> None:
         return None
@@ -140,6 +145,15 @@ class InMemoryEventRepository:
         async with self._lock:
             entry = self._outbox.get(sequence)
             return str(entry["status"]) if entry is not None else None
+
+    async def load_runtime_state(self, key: str) -> dict | None:
+        async with self._lock:
+            value = self._runtime_state.get(key)
+            return json.loads(json.dumps(value)) if value is not None else None
+
+    async def save_runtime_state(self, key: str, value: dict) -> None:
+        async with self._lock:
+            self._runtime_state[key] = json.loads(json.dumps(value))
 
 
 class PostgresEventRepository:
@@ -389,6 +403,30 @@ class PostgresEventRepository:
                 sequence,
             )
         return state
+
+    async def load_runtime_state(self, key: str) -> dict | None:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            value = await connection.fetchval(
+                "SELECT value FROM avera_runtime_state WHERE state_key = $1",
+                key,
+            )
+        if value is None:
+            return None
+        return json.loads(value) if isinstance(value, str) else dict(value)
+
+    async def save_runtime_state(self, key: str, value: dict) -> None:
+        pool = self._require_pool()
+        serialized = json.dumps(value, separators=(",", ":"))
+        async with pool.acquire() as connection:
+            await connection.execute(
+                """INSERT INTO avera_runtime_state (state_key, value, updated_at)
+                   VALUES ($1, $2::jsonb, now())
+                   ON CONFLICT (state_key) DO UPDATE
+                   SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at""",
+                key,
+                serialized,
+            )
 
     def _require_pool(self):
         if self._pool is None:

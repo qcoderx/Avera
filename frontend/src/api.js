@@ -2,7 +2,6 @@
 // API traffic stays same-origin and is forwarded by Vite in development and by
 // the Vercel rewrite in production. This avoids exposing the backend to browser CORS.
 const BASE = '/api';
-const TOKEN_KEY = 'avera.approver-tokens';
 
 export class ApiError extends Error {
   constructor(status, detail, path) {
@@ -13,7 +12,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, { method = 'GET', body, token, timeout = 20000, query } = {}) {
+async function request(path, { method = 'GET', body, timeout = 20000, query } = {}) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeout);
   const url = new URL(`${BASE}${path}`, window.location.origin);
@@ -27,7 +26,6 @@ async function request(path, { method = 'GET', body, token, timeout = 20000, que
       headers: {
         Accept: 'application/json',
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -67,15 +65,13 @@ export const api = {
   rerunGhostTest: (hypothesisId, runs = 5) => request('/ghost-test/rerun', { method: 'POST', body: { hypothesis_id: hypothesisId, runs }, timeout: 60000 }),
   simulateTwin: (toGateway, destinationBank = 'BANK_X', runs = 5) => request('/twin/simulate', { method: 'POST', body: { to_gateway: toGateway, destination_bank: destinationBank, runs }, timeout: 60000 }),
   ingest: (source, type, data, occurredAt) => request(`/ingest/${encodeURIComponent(source)}`, { method: 'POST', body: { type, data, ...(occurredAt ? { occurred_at: occurredAt } : {}) } }),
-  devToken: (role) => request('/dev/auth/token', { method: 'POST', body: { role } }),
-  approvals: (token, query) => request('/approvals', { token, query }),
-  approval: (id, token) => request(`/approvals/${encodeURIComponent(id)}`, { token }),
-  decide: (id, token, decision, payloadHash, reason) => request(`/approvals/${encodeURIComponent(id)}`, {
+  approvals: (query) => request('/approvals', { query }),
+  approval: (id) => request(`/approvals/${encodeURIComponent(id)}`),
+  decide: (id, decision, payloadHash, reason) => request(`/approvals/${encodeURIComponent(id)}`, {
     method: 'POST',
-    token,
     body: { decision, payload_hash: payloadHash, ...(reason ? { reason } : {}) },
   }),
-  remediation: (incidentId, token) => request(`/remediation/${encodeURIComponent(incidentId)}`, { token }),
+  remediation: (incidentId) => request(`/remediation/${encodeURIComponent(incidentId)}`),
 };
 
 // Ordered SSE stream. EventSource resends Last-Event-ID on reconnect, so no record is lost.
@@ -95,60 +91,3 @@ export function openStream({ after = 0, onRecord, onOpen, onError }) {
   source.onerror = () => onError?.(source.readyState);
   return () => source.close();
 }
-
-// Approver tokens live only for this browser session and are scoped by role.
-function decodeClaims(token) {
-  try {
-    const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(atob(part.padEnd(part.length + ((4 - (part.length % 4)) % 4), '=')));
-  } catch {
-    return null;
-  }
-}
-
-function readTokens() {
-  try {
-    return JSON.parse(window.sessionStorage.getItem(TOKEN_KEY) || '{}');
-  } catch {
-    return {};
-  }
-}
-
-function writeTokens(tokens) {
-  try {
-    window.sessionStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
-  } catch {
-    // Storage can be unavailable (private mode); the token then lasts for this page only.
-  }
-  memoryTokens = tokens;
-}
-
-let memoryTokens = readTokens();
-
-export const auth = {
-  get(role) {
-    const entry = memoryTokens[role];
-    if (!entry) return null;
-    if (entry.exp && entry.exp * 1000 < Date.now() + 15000) {
-      auth.clear(role);
-      return null;
-    }
-    return entry;
-  },
-  set(token) {
-    const claims = decodeClaims(token.trim());
-    if (!claims?.role || !claims?.sub) throw new Error('That token has no approver role or subject');
-    if (claims.exp && claims.exp * 1000 < Date.now()) throw new Error('That token has already expired');
-    writeTokens({ ...memoryTokens, [claims.role]: { token: token.trim(), role: claims.role, sub: claims.sub, exp: claims.exp } });
-    return memoryTokens[claims.role];
-  },
-  clear(role) {
-    const next = { ...memoryTokens };
-    delete next[role];
-    writeTokens(next);
-  },
-  async signIn(role) {
-    const response = await api.devToken(role);
-    return auth.set(response.access_token);
-  },
-};

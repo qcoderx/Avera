@@ -1,4 +1,4 @@
-"""Cross-origin browser access is explicit and credential-safe."""
+"""Cross-origin browser access is explicit and narrowly scoped."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def test_cors_is_closed_by_default(monkeypatch) -> None:
     assert "access-control-allow-origin" not in response.headers
 
 
-def test_configured_frontend_can_preflight_authenticated_approval_requests(monkeypatch) -> None:
+def test_configured_frontend_can_preflight_approval_requests(monkeypatch) -> None:
     monkeypatch.setenv("AVERA_CORS_ORIGINS", f"{FRONTEND}, https://ops.example")
 
     with _client() as client:
@@ -37,14 +37,14 @@ def test_configured_frontend_can_preflight_authenticated_approval_requests(monke
             headers={
                 "Origin": FRONTEND,
                 "Access-Control-Request-Method": "GET",
-                "Access-Control-Request-Headers": "authorization,content-type",
+                "Access-Control-Request-Headers": "content-type",
             },
         )
 
         assert response.status_code == 200
         assert response.headers["access-control-allow-origin"] == FRONTEND
-        assert response.headers["access-control-allow-credentials"] == "true"
-        assert "Authorization" in response.headers["access-control-allow-headers"]
+        assert "Content-Type" in response.headers["access-control-allow-headers"]
+        assert "access-control-allow-credentials" not in response.headers
 
         health = client.get("/health", headers={"Origin": FRONTEND})
         assert health.headers["access-control-allow-origin"] == FRONTEND

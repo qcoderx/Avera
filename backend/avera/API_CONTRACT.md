@@ -14,10 +14,10 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 | POST | `/demo/start` | Start or replay the demo | Incident Command Centre |
 | POST | `/demo/inject` | Inject the deterministic failure and decoy | Incident Command Centre |
 | POST | `/demo/reset` | Reset the simulated bank to its known baseline | Incident Command Centre |
-| GET | `/remediation/{incident_id}` | Read the authenticated incident plan, blast radius, approval IDs, and resolution timeline | Incident Command Centre |
-| GET | `/approvals` | List pending/final approvals for the authenticated user's role | Approver UI |
-| GET | `/approvals/{id}` | Read an approval visible to the authenticated user's role | Approver UI |
-| POST | `/approvals/{id}` | Record the authenticated approver's decision | Approver UI |
+| GET | `/remediation/{incident_id}` | Read the simulated incident plan, blast radius, approval IDs, and resolution timeline | Incident Command Centre |
+| GET | `/approvals` | List pending/final simulated approvals | Approver UI |
+| GET | `/approvals/{id}` | Read a simulated approval | Approver UI |
+| POST | `/approvals/{id}` | Record a public simulated decision | Approver UI |
 
 ## Shared wire rules
 
@@ -25,8 +25,7 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 - `TestResult.confidence` is a fraction in `[0, 1]` (for example `0.96` means 96%). The Ghost Test handoff threshold is `0.85`.
 - `BlastRadius.customers` contains tokenised customer identifiers. `customers_complete` is false when the fixture/API returns a display sample instead of the full affected set.
 - Approval decisions require both `approver` and `decided_at`; pending approvals have neither.
-- Approval routes require a signed HS256 JWT from the configured issuer/audience. Required claims are `sub`, `role`, `iss`, `aud`, `iat`, and `exp`; roles are `engineer` and `customer_dispute`. The client cannot set the approver identity or role in the request body.
-- `POST /dev/auth/token` is a development-only local token issuer. It requires explicit development mode and opt-in, accepts loopback requests only, returns 10-minute tokens with `Cache-Control: no-store`, and must remain disabled outside local development. Production JWTs come from the bank identity provider.
+- Approval and remediation routes are intentionally unauthenticated for this simulated MVP. The server derives the required role from the approval record, ignores client-supplied identity or role headers, and records the actor as `demo-platform-operator`.
 - `ResolutionEvent` records what was prepared or applied. It never represents a transfer, reversal, or other movement of customer funds.
 - Contract payloads reject undeclared fields so accidental interface drift is visible during development.
 - PostgreSQL assigns the authoritative sequence; the stream repository deduplicates by `(type, object id, occurred_at)` so repeated incident lifecycle updates remain distinct while fixture replay is idempotent.
@@ -38,7 +37,7 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 - The `/hypotheses` response includes a short `summary`, `summary_source`, and optional `summary_model`. Without explicit model configuration this is generated locally. An optional GPT summary is advisory only; deterministic `TestResult` confidence/verdict fields control handoff and are never modified by the model.
 - `POST /ghost-test/rerun` uses the current simulated Bank X route in an isolated copy. It never mutates the live bank or moves real funds.
 - `POST /twin/simulate` compares the current route with a candidate route using detached simulator copies; it never changes the live route.
-- Approval records are created by the validated remediation workflow, not by a client-supplied approval payload. The platform verifies role, requester separation, expiry, and the payload hash before accepting a JWT-authenticated decision. An approved config decision drives the simulated route adapter; there is no standalone unauthenticated route-mutation endpoint.
+- Approval records are created by the validated remediation workflow, not by a client-supplied approval payload. The platform verifies requester separation, expiry, and the payload hash before accepting a public simulated decision. An approved config decision drives the simulated route adapter; there is no standalone route-mutation endpoint.
 - SMS, code, and reconciliation decisions are recorded in-platform. The MVP uses simulated gateways and does not connect to external SMS, source-control, bank, or reconciliation systems.
 - Existing-platform connection buttons are integration entry points for the UI; this backend records decisions internally and does not yet authenticate to, send to, or execute actions in external platforms.
 - The Vite development server proxies `/api/*` to FastAPI and strips the `/api` prefix, including for `/api/stream` SSE. Browser development uses same-origin proxying rather than permissive backend CORS.
@@ -62,14 +61,16 @@ See `docs/observability.md` for configuration and current limits.
 
 ## Runtime persistence boundary
 
-PostgreSQL and Kafka/Redpanda currently back the canonical event stream when
-configured. Approval, audit-chain, and remediation-case repositories are still
-in-memory adapters in this MVP. The JWT-protected flow and simulator are
-integration-tested, but production rollout requires durable PostgreSQL
-repositories and a transactional outbox for remediation events before a restart
-can safely preserve pending approvals or decisions. Kafka is currently the
-outbound notification backbone; external source/webhook events enter through
-`POST /ingest/{source}` rather than a Kafka input consumer.
+PostgreSQL and Kafka/Redpanda back the canonical event stream when configured.
+Approval, audit-chain, and remediation-case repositories remain in-process domain
+adapters, with their current aggregate state and simulated route stored as a
+versioned PostgreSQL snapshot after each handoff, decision, and reset. Startup
+validates and restores that snapshot before accepting traffic, so pending approvals
+and their executable case context survive restarts. The browser reconciles replayed
+stream history against `GET /approvals`; historical approvals absent from current
+state are not actionable. Kafka is currently the outbound notification backbone;
+external source/webhook events enter through `POST /ingest/{source}` rather than a
+Kafka input consumer.
 
 ## Full-story UI fixture
 
