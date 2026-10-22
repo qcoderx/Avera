@@ -31,7 +31,7 @@ I worked on Avera's Observability Agent, the central intelligence layer that mak
 
 #### How I Used AI
 
-I used AI to generate synthetic test data that helped me verify how the Observability Agent connects signals and identifies incidents. The agent's reasoning logic, behaviour, and integration validated the data and work.
+I used Codex to generate synthetic test data that helped me verify how the Observability Agent connects signals and identifies incidents. The agent's reasoning logic, behaviour, and integration validated the data and work.
 
 ### Adam
 
