@@ -3,6 +3,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://api.avera.clippit.click/:path*"
+    },
+    {
+      "source": "/bank",
+      "destination": "/index.html"
     }
   ]
 }

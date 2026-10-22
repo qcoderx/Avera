@@ -112,6 +112,8 @@ Without PostgreSQL or Kafka configuration, the backend uses in-memory adapters. 
 
 The hosted MVP API is `https://api.avera.clippit.click`. The deployed web client is `https://avera-lilac.vercel.app`; direct browser clients must be listed as exact origins in `AVERA_CORS_ORIGINS`.
 
+The frontend also includes a contained mock-bank repair journey at `/bank`. It reproduces a duplicate debit caused by an unstable retry idempotency key, lets one constrained repair agent edit an isolated source workspace, runs regression tests, and verifies the original transfer journey before showing a resolution report.
+
 ## Verification
 
 Run the backend regression suite:
