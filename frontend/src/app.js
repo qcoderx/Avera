@@ -838,15 +838,30 @@ promptRegion.className = 'approval-prompt-region';
 document.body.appendChild(promptRegion);
 const dismissedPrompts = new Set();
 
-function pendingReroute() {
-  if (currentStep() !== 5) return null;
-  if (isLive()) return D.approvals.find((item) => item.rawKind === 'config' && item.status === 'pending') || null;
-  const item = fixture.approvals.find((approval) => approval.kind === 'Routing change');
-  return item && state.approvals[item.id] === 'pending' ? item : null;
+function pendingDecision() {
+  if (currentStep() < 5) return null;
+  const approvals = isLive()
+    ? D.approvals
+    : fixture.approvals.map((item) => ({ ...item, status: state.approvals[item.id] }));
+  const pending = approvals.filter((item) => item.status === 'pending');
+  const priority = (item) => {
+    if (item.rawKind === 'config' || item.kind === 'Routing change') return 0;
+    if (item.rawKind === 'sms' || item.kind === 'Customer message') return 1;
+    if (item.rawKind === 'reconciliation') return 2;
+    return 3;
+  };
+  return pending.sort((a, b) => priority(a) - priority(b))[0] || null;
+}
+
+function promptAction(item) {
+  if (item.rawKind === 'config' || item.kind === 'Routing change') return 'Approve reroute';
+  if (item.rawKind === 'sms' || item.kind === 'Customer message') return 'Approve message';
+  if (item.rawKind === 'reconciliation') return 'Approve hand-off';
+  return 'Approve action';
 }
 
 function drawApprovalPrompt() {
-  const pending = state.loading || state.view === 'approvals' ? null : pendingReroute();
+  const pending = state.loading || state.view === 'approvals' ? null : pendingDecision();
   const item = pending && !dismissedPrompts.has(pending.id) ? pending : null;
   const key = item ? [item.id, state.busy].join('|') : '';
   if (key === promptRegion.dataset.key) return;
@@ -855,7 +870,11 @@ function drawApprovalPrompt() {
     promptRegion.innerHTML = '';
     return;
   }
-  const reason = isLive() ? approvalReason(item) : `The digital twin passed ${D.fixPlan.simulationSuccess}% of synthetic transfers through Gateway C. Rollback is automatic if errors rise.`;
+  const reason = isLive()
+    ? approvalReason(item)
+    : item.kind === 'Customer message'
+      ? `The message targets ${formatNumber(D.impact.affected)} affected customers and contains only the incident context they need.`
+      : `The digital twin passed ${D.fixPlan.simulationSuccess}% of synthetic transfers through Gateway C. Rollback is automatic if errors rise.`;
   promptRegion.innerHTML = `
     <section class="approval-prompt" role="alertdialog" aria-labelledby="approval-prompt-title" aria-describedby="approval-prompt-reason">
       <img src="/assets/agents/resolution/agent-listen-a.png" alt=""/>
@@ -863,9 +882,9 @@ function drawApprovalPrompt() {
         <span class="prompt-agent"><i></i>Resolution · Waiting for approval</span>
         <h2 id="approval-prompt-title">${item.title}</h2>
         <p id="approval-prompt-reason">${reason}</p>
-        <small>This public MVP applies decisions only to the simulated bank. Nothing changes until you approve.</small>
+        <small>This public MVP records decisions only for the simulated bank. No real customer, funds or production system is touched.</small>
         <div class="prompt-actions">
-          <button class="primary-button" data-prompt="approve" ${state.busy ? 'disabled' : ''}>${state.busy === 'decide' ? 'Recording decision…' : 'Approve reroute'}</button>
+          <button class="primary-button" data-prompt="approve" ${state.busy ? 'disabled' : ''}>${state.busy === 'decide' ? 'Recording decision…' : promptAction(item)}</button>
           <button class="secondary-button" data-prompt="review">Review details</button>
           <button class="text-button inline" data-prompt="later">Later</button>
         </div>
@@ -875,7 +894,7 @@ function drawApprovalPrompt() {
 
 promptRegion.addEventListener('click', async (event) => {
   const button = event.target.closest('[data-prompt]');
-  const item = button && pendingReroute();
+  const item = button && pendingDecision();
   if (!item) return;
   state.activeApproval = item.id;
   const choice = button.dataset.prompt;
@@ -909,7 +928,7 @@ function togglePlay(fromPanel = false) {
     if (state.demoStep === fixture.demoSteps.length - 1) state.demoStep = 0;
     playTimer = window.setInterval(() => {
       // Playback stops at the approval gate: the reroute needs a human decision before it can resolve.
-      if (state.demoStep >= fixture.demoSteps.length - 1 || pendingReroute()) {
+      if (state.demoStep >= fixture.demoSteps.length - 1 || pendingDecision()) {
         clearInterval(playTimer);
         state.playing = false;
       } else state.demoStep += 1;

@@ -1,32 +1,89 @@
-# Avera Incident Command Centre
+# Avera
 
-Avera is an incident-intelligence platform for digital banking. It correlates operational signals and customer reports, tests competing explanations, and presents human-reviewed resolution actions in one command centre.
+Avera is an AI-assisted incident command centre for digital banking. It turns fragmented operational signals and customer reports into an evidence-backed incident, tests competing explanations in a digital twin, maps customer impact, and prepares guarded recovery actions for human approval.
 
-## High-level system design (target)
+The current MVP models one bank and one high-value transfer incident end to end. All customers, transactions, routes, messages, and approvals are simulated; no real funds, customer contacts, payment rails, or production banking systems are connected.
 
-![Avera high-level system design](Avera_High_Level_System_Design.png)
+## System architecture
 
-External operational and customer signals enter through an API gateway and Kafka event backbone. The platform correlates signals into incidents, keeps incident and workflow state, and orchestrates accountable agents through a controlled AI gateway. Evidence, audit logs, and sandboxed changes support human review in the command panel.
+![Avera system architecture](avera-diagram-completed.png)
 
-## Current MVP
+The target architecture separates signal ingestion, incident intelligence, decision support, and human control:
 
-The current implementation is a single-bank simulation, not a live banking integration. It includes simulated incident traffic, an ordered event API and SSE stream, deterministic Ghost Tests, an isolated route twin, evidence-scoped blast-radius analysis, in-platform approvals, and simulated route changes. PostgreSQL and Kafka/Redpanda back the deployed event stream, and PostgreSQL stores a versioned snapshot of the current approval, audit, remediation-case, and simulated-route state so pending work survives API restarts. Local development defaults to in-memory adapters. The public unauthenticated MVP is still not production-deployable for a bank.
+| Layer | Responsibility |
+| --- | --- |
+| Ingestion and event backbone | Accept operational and customer-channel events, validate schemas, preserve ordering, and distribute notifications through Kafka. |
+| Signal fusion and incident graph | Correlate complaints, behavioural changes, service telemetry, and route failures into one incident fingerprint. |
+| Accountable agents | Investigate evidence, run safe disproof tests, calculate blast radius, and prepare a recovery plan. |
+| State and memory | Persist the ordered event stream, workflow snapshots, approvals, audit records, and simulated route state in PostgreSQL. |
+| Incident Command Centre | Present service health, the scenario map, hypotheses, Ghost Tests, customer impact, plans, approvals, and the incident timeline. |
+| Human approval gates | Keep customer communication, configuration changes, code changes, and reconciliation work under named human authority. |
 
-Shaz's Observability Agent parses reported complaint facts, detects behavioural signals and incident changes, maps suspect components, generates competing hypotheses, and hands validated candidates to Ghost Test. Validated results now flow into remediation, which publishes the plan, blast radius, workflow approvals, and resolution events on the same stream. See [setup, run commands, evidence boundaries, and fixture limitations](docs/observability.md) and the [API contract and production persistence boundary](backend/avera/API_CONTRACT.md).
+In the implemented MVP, HTTP ingestion is the source boundary. PostgreSQL is the durable event and workflow store, Kafka is the outbound event-notification bus, and Server-Sent Events deliver the ordered stream to the command centre. The architecture diagram also shows the intended next-stage Kafka ingestion path and external platform integrations.
 
-Ghost Test can optionally use GPT-5.4 Mini to summarize aggregate test results. The model does not choose the verdict, score hypotheses, approve actions, or change routes. External source/platform connections shown in the design remain integration work.
+## Incident workflow
+
+1. **Observe** — typed events arrive through the ingestion API and are normalized into a shared event envelope.
+2. **Correlate** — the Observability Agent fuses complaints and behavioural signals, opens an incident, identifies suspect zones, and ranks competing hypotheses.
+3. **Disprove** — the Ghost Test Agent runs deterministic experiments against an isolated route twin. GPT may summarize aggregate results, but it cannot score evidence or choose the verdict.
+4. **Scope** — the Blast Radius Agent applies the validated fingerprint to synthetic bank records, identifies affected and silent customers, and prepares a policy-safe recovery plan.
+5. **Approve** — routing, customer-message, code, and reconciliation actions enter an auditable in-platform approval queue. The scenario map stops at the routing gate and continues to surface unresolved follow-up decisions after containment.
+6. **Resolve and verify** — an approved simulated route change is applied, the original Ghost Tests are rerun, live signals are checked, and the incident is written to memory with open follow-ups.
+
+## Accountable agents
+
+- **Observability Agent** — parses reports, detects behavioural changes, creates the incident fingerprint, and generates evidence-linked hypotheses.
+- **Ghost Test Agent** — designs deterministic disproof tests, compares suspect and control routes, and validates or rejects each hypothesis.
+- **Blast Radius Agent** — calculates affected customers and exposure from the validated fingerprint, then prepares communications and remediation steps.
+- **Resolution Agent** — requests approvals, applies only approved simulated actions, verifies recovery, and records the decision trail.
+
+The agents share one ordered event stream and explicit contracts. Production-facing authority always remains outside the model.
+
+## MVP capabilities
+
+- Single-bank traffic simulation with thousands of synthetic events
+- API ingestion for logs, metrics, complaints, social reports, support tickets, and behavioural signals
+- PostgreSQL-backed ordered events, transactional outbox, and durable workflow snapshots
+- Managed Kafka or local Redpanda delivery with at-least-once semantics
+- Live SSE updates for the Incident Command Centre
+- Deterministic Ghost Tests and an isolated route twin
+- Evidence-scoped customer impact and remediation planning
+- Payload-bound, hash-verified in-platform approvals
+- Simulated route application, rollback guardrails, and post-change verification
+- Sanitized operational console at [`/observe`](https://api.avera.clippit.click/observe)
+
+This is a technical MVP, not a production banking control plane. Approval routes are intentionally unauthenticated for the public demo and must be protected with bank identity, authorization, network controls, secrets management, and production-grade observability before any real integration.
+
+## Repository structure
+
+```text
+backend/
+  avera/api/             FastAPI routes, SSE, health, and observability UI
+  avera/events/          Event contracts, persistence, Kafka, and outbox delivery
+  avera/observability/   Signal fusion, hypothesis generation, and investigation
+  avera/remediation/     Blast radius, approvals, resolution, and audit workflow
+  avera/simulation/      Synthetic bank, traffic, and failure injection
+  tests/                 Backend and end-to-end regression suites
+frontend/
+  src/                   Incident Command Centre and live scenario map
+  public/                Product and agent assets
+docs/                    Tracked technical documentation and agent-flow diagrams
+```
 
 ## Run locally
 
-Start the backend:
+Requirements: Python 3.11+, Node.js 20+, and optional PostgreSQL plus Kafka/Redpanda for durable mode.
+
+Start the API:
 
 ```bash
 cd backend
-python -m pip install -r requirements.txt
-PYTHONPATH=. uvicorn avera.api.app:app --reload
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+PYTHONPATH=. .venv/bin/python -m uvicorn avera.api.app:app --reload --port 8766
 ```
 
-Start the frontend in another terminal:
+Start the command centre in another terminal:
 
 ```bash
 cd frontend
@@ -34,33 +91,47 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`.
+Open `http://localhost:5173`. Vite proxies `/api/*` to `http://127.0.0.1:8766` by default. Copy values from the tracked [`backend/.env.example`](backend/.env.example) and [`frontend/.env.example`](frontend/.env.example) when configuration overrides are needed; keep credentials out of version control.
 
-### Live API
+Without PostgreSQL or Kafka configuration, the backend uses in-memory adapters. Durable mode requires `AVERA_DATABASE_URL` and `AVERA_KAFKA_BOOTSTRAP_SERVERS`; authenticated managed Kafka additionally requires the SASL/TLS variables documented in the backend environment example.
 
-The frontend talks to the deployed API at `https://api.avera.clippit.click` by default: the Vite dev and preview servers proxy `/api/*` to it, so the browser stays same-origin. To use a local backend instead, set `AVERA_API_PROXY_TARGET=http://127.0.0.1:8766` in `frontend/.env`. A build hosted on another origin can call the API directly with `VITE_AVERA_API_BASE`, provided the API lists that origin in `AVERA_CORS_ORIGINS`.
+## API surface
 
-Every page renders the live `/stream`: incident, hypotheses, Ghost Test results, blast radius, fix plan, approvals and resolution events. The demo controller (`D`) starts a baseline, injects the failure, resets, investigates or replays the recorded stream. Approval routes are intentionally public for this simulated MVP; the server derives the workflow role and records decisions as `demo-platform-operator`. If the API is unreachable, the command centre falls back to the recorded fixture and retries the connection. Add `?mode=fixture` to force the recorded story.
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /demo/start`, `/demo/inject`, `/demo/reset` | Drive the healthy baseline, synthetic failure, or clean demo state. |
+| `POST /ingest/{source}` | Accept typed external-source events. |
+| `POST /hypotheses` | Submit hypotheses for deterministic Ghost Test evaluation. |
+| `POST /twin/simulate` | Evaluate a candidate route in the isolated twin. |
+| `GET /remediation/{incident_id}` | Read the impact analysis, fix plan, and resolution state. |
+| `GET /approvals`, `GET /approvals/{id}`, `POST /approvals/{id}` | Read and decide payload-bound simulated approvals. |
+| `GET /stream` | Consume the ordered incident stream over SSE. |
+| `GET /service-map`, `GET /health` | Read topology, route state, and dependency health. |
+| `GET /observe` | Open the sanitized backend operations console. |
 
-Build the frontend for production:
+The hosted MVP API is `https://api.avera.clippit.click`. The deployed web client is `https://avera-lilac.vercel.app`; direct browser clients must be listed as exact origins in `AVERA_CORS_ORIGINS`.
+
+## Verification
+
+Run the backend regression suite:
+
+```bash
+cd backend
+.venv/bin/python -m pytest -q
+```
+
+Build the frontend:
 
 ```bash
 cd frontend
 npm run build
 ```
 
-The command centre includes incident health and feed, service map, hypotheses and Ghost Test runs, customer impact, fix plan, approvals, timeline, and institutional memory. The service map is a Three.js story stage driven by the demo step. It shows the 1,109 affected customers as a crowd that turns coral as transfers fail silently, with the 13 complainers raised. The broken Gateway B acknowledgement is called out on the link itself, and hypothesis chips carry live confidence bars. A digital twin rises above the board while Ghost Tests run, and the reroute arc is locked until an engineer approves. A story bar, agent pipeline and timeline narrate each moment. The view is square to the board and only moves when you drag, scroll or use the zoom buttons. It falls back to the flat map when WebGL is unavailable. Add `?view=map&step=3` to the URL to open a specific view and step. The demo controller opens from the header or with the `D` key.
+The regression suite covers event ordering, PostgreSQL persistence, Kafka security configuration, observability-to-remediation handoff, approval integrity, restart recovery, route application, rollback, and end-to-end demo readiness.
 
-Run the backend regression suite, including the integrated observability/remediation path:
+## Technical references
 
-```bash
-cd backend
-python -m pip install -r requirements-dev.txt
-PYTHONPATH=. pytest -q
-```
-
-For complaint parsing and hypothesis investigation, set `OPENAI_API_KEY` and `AVERA_OBSERVABILITY_MODEL=gpt-5.4-mini` in the backend environment. Optional Ghost Test summaries use `AVERA_GHOST_SUMMARY_MODEL`; without it, summaries use the deterministic local fallback.
-
-## Safety boundary
-
-All bank, customer, payment, and SMS data in the demo is synthetic. The API does not move real funds, contact real customers, send SMS, or execute production changes. Approval and route APIs operate only on the simulated bank.
+- [API contract and persistence boundary](backend/avera/API_CONTRACT.md)
+- [Observability Agent](docs/observability.md)
+- [Remediation agents and approval model](docs/remediation.md)
+- [Backend operations and deployment](backend/README.md)
