@@ -1,5 +1,5 @@
 // Turns agent and model output (snake_case ids, service slugs, SCREAMING codes, run-on
-// "Observations:" paragraphs) into text an engineer can read at a glance.
+// "Observations:" paragraphs) into text an engineer can read at a glance. They need to know what the agents are doing
 
 const ACRONYMS = new Set(['ACK', 'API', 'USSD', 'SMS', 'ETA', 'ID', 'HTTP', 'NIP', 'OTP']);
 const SERVICES = { 'payment-router': 'payment router', 'api-gateway': 'API gateway', 'core-banking': 'core banking', 'mobile-app': 'mobile app', 'customer-app': 'customer app', 'transfer-ui': 'transfer screen', 'ussd-gateway': 'USSD gateway' };
