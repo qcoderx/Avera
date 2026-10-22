@@ -31,7 +31,17 @@ const state = {
 
 // Live connection: the API is the source of truth; the recorded fixture is the offline fallback.
 const store = new LiveStore();
-const live = { mode: params.get('mode') === 'fixture' ? 'fixture' : 'connecting', stream: 'closed', health: null, routes: null, error: null, closeStream: null, retry: null };
+const live = {
+  mode: params.get('mode') === 'fixture' ? 'fixture' : 'connecting',
+  stream: 'closed',
+  health: null,
+  routes: null,
+  approvalIds: new Set(),
+  approvalRefresh: null,
+  error: null,
+  closeStream: null,
+  retry: null,
+};
 let D = fixture;
 
 function isLive() {
@@ -1181,14 +1191,47 @@ window.setInterval(tickClocks, 1000);
 
 async function refreshHealth() {
   try {
-    const [health, map] = await Promise.all([api.health(), api.serviceMap()]);
+    const [health, map, approvals] = await Promise.all([api.health(), api.serviceMap(), api.approvals()]);
     live.health = health;
     live.routes = map.routes;
+    live.approvalIds = new Set(approvals.map((item) => item.id));
+    store.reconcileApprovalIds(live.approvalIds);
     return true;
   } catch (error) {
     live.error = error.message;
     return false;
   }
+}
+
+async function refreshApprovalIds() {
+  if (!live.approvalRefresh) {
+    live.approvalRefresh = api.approvals()
+      .then((approvals) => {
+        live.approvalIds = new Set(approvals.map((item) => item.id));
+        store.reconcileApprovalIds(live.approvalIds);
+      })
+      .finally(() => { live.approvalRefresh = null; });
+  }
+  await live.approvalRefresh;
+}
+
+function ingestLiveRecord(record) {
+  if (record.type !== 'approval' || live.approvalIds.has(record.data.id)) {
+    store.ingest(record);
+    noteRecord(record);
+    return;
+  }
+  // The stream is durable history, while /approvals is the authority for what
+  // can be acted on now. Ignore historical approvals unless the API confirms
+  // that the record belongs to the current restored workflow state.
+  refreshApprovalIds()
+    .then(() => {
+      if (live.approvalIds.has(record.data.id)) {
+        store.ingest(record);
+        noteRecord(record);
+      }
+    })
+    .catch(() => {});
 }
 
 async function connect() {
@@ -1209,10 +1252,7 @@ async function connect() {
   live.closeStream?.();
   live.closeStream = openStream({
     after: store.lastSequence,
-    onRecord: (record) => {
-      store.ingest(record);
-      noteRecord(record);
-    },
+    onRecord: ingestLiveRecord,
     onOpen: () => { live.stream = 'open'; streamOpenedAt ||= Date.now(); liveRender(); },
     onError: () => { live.stream = 'reconnecting'; liveRender(); },
   });

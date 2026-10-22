@@ -116,6 +116,41 @@ def test_validated_ghost_handoff_creates_public_demo_approvals_and_route_execute
         streamed_types = {record.type.value for record in stream_records}
         assert {"approval", "resolution_event", "fix_plan", "blast_radius"} <= streamed_types
 
+
+def test_pending_approval_and_remediation_case_survive_api_restart():
+    repository = InMemoryEventRepository()
+
+    with TestClient(create_app(
+        repository=repository,
+        bus=InMemoryEventBus(),
+        observability_model=ScriptedModel(),
+    )) as client:
+        inject(client)
+        result = client.post("/observability/investigate").json()
+        assert result["state"] == "tested", result
+        case_id = client.get("/health").json()["remediation"]["case_id"]
+        config = next(item for item in client.get("/approvals").json() if item["kind"] == "config")
+        routes_before_restart = client.get("/service-map").json()["routes"]
+
+    with TestClient(create_app(
+        repository=repository,
+        bus=InMemoryEventBus(),
+        observability_model=ScriptedModel(),
+    )) as restarted:
+        assert restarted.get("/health").json()["remediation"]["case_id"] == case_id
+        restored = restarted.get("/approvals").json()
+        assert config["id"] in {item["id"] for item in restored}
+        assert restarted.get(f"/remediation/{case_id}").status_code == 200
+        assert restarted.get("/service-map").json()["routes"] == routes_before_restart
+
+        decision = restarted.post(
+            f"/approvals/{config['id']}",
+            json={"decision": "approve", "payload_hash": config["payload_hash"]},
+        )
+        assert decision.status_code == 200, decision.text
+        assert restarted.get("/service-map").json()["routes"]["BANK_X"] == "gateway_c"
+
+
 def make_agent(model=None):
     bank = SimulatedBank()
     stream = EventStreamService(InMemoryEventRepository(), InMemoryEventBus())

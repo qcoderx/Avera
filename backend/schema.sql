@@ -33,6 +33,15 @@ CREATE INDEX IF NOT EXISTS avera_event_outbox_pending_idx
     ON avera_event_outbox (sequence)
     WHERE delivered_at IS NULL AND dead_lettered_at IS NULL;
 
+-- Versioned snapshots for workflow state that must survive API restarts. The
+-- append-only stream remains the event/audit history; this table restores the
+-- current actionable approval and remediation aggregate.
+CREATE TABLE IF NOT EXISTS avera_runtime_state (
+    state_key TEXT PRIMARY KEY,
+    value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Queue legacy log rows once when upgrading from the pre-outbox schema.
 INSERT INTO avera_event_outbox (sequence)
 SELECT sequence FROM avera_stream_records

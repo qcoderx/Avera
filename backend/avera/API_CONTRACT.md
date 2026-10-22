@@ -61,14 +61,16 @@ See `docs/observability.md` for configuration and current limits.
 
 ## Runtime persistence boundary
 
-PostgreSQL and Kafka/Redpanda currently back the canonical event stream when
-configured. Approval, audit-chain, and remediation-case repositories are still
-in-memory adapters in this MVP. The public simulated approval flow and simulator are
-integration-tested, but production rollout requires durable PostgreSQL
-repositories and a transactional outbox for remediation events before a restart
-can safely preserve pending approvals or decisions. Kafka is currently the
-outbound notification backbone; external source/webhook events enter through
-`POST /ingest/{source}` rather than a Kafka input consumer.
+PostgreSQL and Kafka/Redpanda back the canonical event stream when configured.
+Approval, audit-chain, and remediation-case repositories remain in-process domain
+adapters, with their current aggregate state and simulated route stored as a
+versioned PostgreSQL snapshot after each handoff, decision, and reset. Startup
+validates and restores that snapshot before accepting traffic, so pending approvals
+and their executable case context survive restarts. The browser reconciles replayed
+stream history against `GET /approvals`; historical approvals absent from current
+state are not actionable. Kafka is currently the outbound notification backbone;
+external source/webhook events enter through `POST /ingest/{source}` rather than a
+Kafka input consumer.
 
 ## Full-story UI fixture
 

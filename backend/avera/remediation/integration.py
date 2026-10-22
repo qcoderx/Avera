@@ -16,7 +16,7 @@ from avera.observability.orchestration import ObservabilityAgent
 from avera.remediation.blast_radius import BlastRadiusConfig
 from avera.remediation.common import naira_to_kobo
 from avera.remediation.fixtures import DISPLAY_TZ, DemoWorld, SimulatedBank as RemediationBank, build_demo_world
-from avera.remediation.models import BehaviourSignal, Role, TransactionRecord, ValidatedHandoff
+from avera.remediation.models import BehaviourSignal, Role, RouteChange, TransactionRecord, ValidatedHandoff
 from avera.remediation.pipeline import Remediation, build_remediation
 from avera.remediation.ports import BankData, Clock, EventPublisher
 
@@ -167,9 +167,52 @@ class RemediationRuntime:
     remediation: Remediation
     bank_data: ObservedBankData
     publisher: BufferedEventPublisher
+    api_bank: object
 
     async def flush_events(self, stream: EventStreamService) -> None:
         await self.publisher.flush(stream)
+
+    def snapshot(self, active_case_id: str | None) -> dict:
+        return {
+            "version": 1,
+            "active_case_id": active_case_id,
+            "approvals": self.remediation.approvals.snapshot(),
+            "audit": [entry.model_dump(mode="json") for entry in self.remediation.audit.entries()],
+            "cases": self.remediation.store.snapshot(),
+            "routes": dict(self.world.bank.routes),
+            "api_routes": dict(self.api_bank.payment_router.routes),
+            "applied_changes": [item.model_dump(mode="json") for item in self.world.bank.applied],
+        }
+
+    def restore(self, snapshot: dict) -> str | None:
+        if snapshot.get("version") != 1:
+            raise ValueError("unsupported remediation state snapshot version")
+        self.remediation.approvals.restore(snapshot.get("approvals", []))
+        self.remediation.audit.restore(snapshot.get("audit", []))
+        self.remediation.store.restore(snapshot.get("cases", []))
+
+        routes = snapshot.get("routes", {})
+        if not isinstance(routes, dict) or not all(
+            isinstance(destination, str) and isinstance(route, str) and "." in route
+            for destination, route in routes.items()
+        ):
+            raise ValueError("persisted remediation routes are invalid")
+        self.world.bank.routes = dict(routes)
+        self.world.bank.applied = [
+            RouteChange.model_validate(item) for item in snapshot.get("applied_changes", [])
+        ]
+        api_routes = snapshot.get("api_routes", {})
+        if not isinstance(api_routes, dict) or not all(
+            isinstance(destination, str) and isinstance(route, str)
+            for destination, route in api_routes.items()
+        ):
+            raise ValueError("persisted API simulator routes are invalid")
+        self.api_bank.payment_router.routes = dict(api_routes)
+
+        active_case_id = snapshot.get("active_case_id")
+        if active_case_id is not None and self.remediation.store.get(active_case_id) is None:
+            raise ValueError("persisted active remediation case is missing")
+        return active_case_id
 
     def make_handoff(self, agent: ObservabilityAgent) -> ValidatedHandoff | None:
         feedback = agent.feedback
@@ -243,4 +286,10 @@ def build_runtime(api_bank) -> RemediationRuntime:
         events=publisher,
     )
     remediation = build_remediation(ports, BlastRadiusConfig(display_tz=DISPLAY_TZ))
-    return RemediationRuntime(world=world, remediation=remediation, bank_data=bank_data, publisher=publisher)
+    return RemediationRuntime(
+        world=world,
+        remediation=remediation,
+        bank_data=bank_data,
+        publisher=publisher,
+        api_bank=api_bank,
+    )

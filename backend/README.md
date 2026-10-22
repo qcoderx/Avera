@@ -46,6 +46,6 @@ The suite exercises the seeded incident path, the observability-to-remediation h
 
 For complaint parsing and hypothesis investigation, configure `OPENAI_API_KEY` and `AVERA_OBSERVABILITY_MODEL=gpt-5.4-mini`. Optional Ghost Test summaries use `AVERA_GHOST_SUMMARY_MODEL`; scoring and routing remain deterministic.
 
-The end-to-end remediation workflow currently uses in-memory approval, audit, and case repositories. PostgreSQL/Kafka configuration durably persists canonical stream events and their pending outbound notifications, but does not yet make remediation state durable. External source events enter through `/ingest/{source}`; Kafka is currently the outbound event-notification bus.
+The remediation domain uses in-process approval, audit, and case repositories while the API is running. In PostgreSQL mode, a versioned atomic snapshot row containing those aggregates and the simulated route is updated after each handoff, decision, and reset, then validated and restored at startup. The frontend reconciles durable stream history against `GET /approvals`, so an old event can never be presented as an actionable decision. External source events enter through `/ingest/{source}`; Kafka is currently the outbound event-notification bus.
 
 No real bank, customer, payment, SMS, or external approval platform is contacted by this MVP. Approval and remediation routes have no authentication and must not be connected to production systems in this form.

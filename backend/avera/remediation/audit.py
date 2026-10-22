@@ -47,6 +47,8 @@ class AuditLog(Protocol):
 
     def verify(self) -> bool: ...
 
+    def restore(self, entries: list[dict]) -> None: ...
+
 
 class InMemoryAuditLog:
     def __init__(self) -> None:
@@ -96,3 +98,12 @@ class InMemoryAuditLog:
                 return False
             prev_hash = entry.hash
         return True
+
+    def restore(self, entries: list[dict]) -> None:
+        restored = [AuditEntry.model_validate(item) for item in entries]
+        with self._lock:
+            previous = self._entries
+            self._entries = restored
+            if not self.verify():
+                self._entries = previous
+                raise ValueError("persisted remediation audit chain is invalid")

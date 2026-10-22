@@ -108,6 +108,18 @@ class ApprovalService:
     def list(self, *, incident_id: str | None = None, status: ApprovalStatus | None = None) -> list[Approval]:
         return self._repo.list(incident_id=incident_id, status=status)
 
+    def snapshot(self) -> list[dict]:
+        return [item.model_dump(mode="json") for item in self._repo.list()]
+
+    def restore(self, items: list[dict]) -> None:
+        restored = [Approval.model_validate(item) for item in items]
+        if any(canonical_hash(item.payload) != item.payload_hash for item in restored):
+            raise ValueError("persisted approval payload hash does not match its payload")
+        with self._lock:
+            self._repo.clear()
+            for item in restored:
+                self._repo.save(item)
+
     def reset_demo_state(self) -> None:
         """Close pending demo decisions and clear them while retaining the audit trail."""
         now = self._clock.now()

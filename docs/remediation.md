@@ -122,11 +122,14 @@ depend on Koded’s seed / observed transactions matching the demo fingerprint.
 `ApprovalKind` enum does not yet include it, that approval is held back from
 `/stream` so schema validation is not broken (see `wire.py`).
 
-Durable restart recovery for in-memory remediation cases, multi-incident
-lifecycle management, and bounded autonomy playbooks beyond the MVP gateway
-failure are out of scope for this slice. Observability prompts, Ghost Test
-experiment design, and Platinum’s UI were not certified by the remediation unit
-suite; end-to-end coverage lives in the wider backend tests and demo path.
+When PostgreSQL is configured, the API stores a versioned snapshot of the current
+approval, audit, remediation-case, and simulated-route aggregates and restores it
+before accepting traffic. This gives the single-bank workflow durable restart
+recovery while retaining the in-process domain adapters. Multi-incident lifecycle
+management and bounded autonomy playbooks beyond the MVP gateway failure remain
+out of scope. Observability prompts, Ghost Test experiment design, and Platinum’s
+UI were not certified by the remediation unit suite; end-to-end coverage lives in
+the wider backend tests and demo path.
 
 ## Checks
 
