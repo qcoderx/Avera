@@ -152,7 +152,7 @@ export class LiveStore {
     this.lastSequence = record.sequence;
     const { type, data } = record;
     // A new demo run restarts simulator event IDs; everything before it belongs to the old run.
-    if (type === 'event' && data.id === 'evt-sim-000001') this.run = emptyRun();
+    if (type === 'event' && (data.id === 'evt-sim-000001' || data.payload?.demo_run_start === true)) this.run = emptyRun();
     const run = this.run;
     const ts = data.ts || record.occurred_at;
 
@@ -289,6 +289,13 @@ function resolutionText(event) {
     verify_after_approved_reroute: event.status === 'verified_pass' ? 'Ghost Tests rerun green after the reroute' : 'Post-fix verification failed',
     mark_incident_resolved: 'Incident resolved and verified',
     open_connector_patch_for_review: 'Connector patch opened for engineer review',
+    reproduce_bank_transfer_failure: 'Duplicate debit reproduced in the isolated bank workspace',
+    review_bank_transfer_patch: 'Transfer patch prepared for engineer review',
+    apply_bank_transfer_patch: 'Transfer idempotency patch applied',
+    run_bank_regression_tests: 'Transfer regression suite passed',
+    verify_bank_transfer_journey: 'Timed-out transfer journey verified with one debit',
+    reverse_duplicate_debit: `Duplicate debit reversed${detail.amount_ngn ? ` · ₦${Number(detail.amount_ngn).toLocaleString('en-NG')}` : ''}`,
+    bank_transfer_repair_failed: 'Transfer repair stopped for review',
   }[event.action] || `${pretty(event.action)} · ${pretty(event.status)}`;
 }
 
@@ -447,11 +454,13 @@ export function viewModel(store, routes, displayStep) {
     ? `Transfers to ${pretty(failing.destination)} ${ERROR_PHRASE[topError] || 'are failing'}`
     : step >= 1 ? 'Transfers are failing without an alert' : base.health.nominalLabel;
 
+  const resolving = run.resolutions.length > 0 && !resolved;
+  const latestResolution = run.resolutions.at(-1);
   const agents = [
     { ...base.agents[0], status: step >= 2 ? 'result' : 'listening', state: run.incident ? 'Incident fingerprinted' : 'Listening to signals', detail: `${run.eventCount.toLocaleString('en-NG')} signals fused` },
     { ...base.agents[1], status: step === 3 ? 'working' : validatedTest ? 'result' : 'listening', state: validatedTest ? `${label.get(validatedTest.hypothesis.id)} validated` : run.tests.size ? 'Testing hypotheses' : 'Waiting for hypotheses', detail: `${run.tests.size} tests complete` },
     { ...base.agents[2], status: blast ? 'result' : step >= 3 ? 'working' : 'listening', state: blast ? 'Impact found' : 'Waiting for a validated cause', detail: blast ? `${affected.toLocaleString('en-NG')} found` : '—' },
-    { ...base.agents[3], status: resolved ? 'result' : 'listening', state: resolved ? 'Incident resolved' : pending.length ? 'Waiting for approval' : 'Standing by', detail: `${pending.length} decision${pending.length === 1 ? '' : 's'} pending` },
+    { ...base.agents[3], status: resolved ? 'result' : resolving ? 'working' : 'listening', state: resolved ? 'Incident resolved' : resolving ? 'Repairing transfer service' : pending.length ? 'Waiting for approval' : 'Standing by', detail: resolving ? resolutionText(latestResolution) : `${pending.length} decision${pending.length === 1 ? '' : 's'} pending` },
   ];
 
   const signals = run.feed.slice(-7).map((item) => ({ time: clock(item.ts), channel: item.channel, text: item.text, tone: item.tone }));
@@ -530,7 +539,7 @@ function approvalTitle(item) {
   if (item.kind === 'config') return `Move ${pretty(p.destination_bank)} traffic to ${pretty(p.to_route?.split('.')[0])}`;
   if (item.kind === 'sms') return `Notify ${(p.recipient_count || 0).toLocaleString('en-NG')} affected customers`;
   if (item.kind === 'reconciliation') return `Prepare reconciliation of ${(p.item_count || 0).toLocaleString('en-NG')} transfers`;
-  if (item.kind === 'code') return 'Patch Gateway B acknowledgement handling';
+  if (item.kind === 'code') return p.summary || `Review code patch for ${p.target || 'the affected service'}`;
   return kindLabel(item.kind);
 }
 

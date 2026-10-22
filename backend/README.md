@@ -35,6 +35,7 @@ The suite exercises the seeded incident path, the observability-to-remediation h
 
 - `POST /demo/run` — start a fresh baseline, inject the synthetic incident, and begin investigation in one request.
 - `POST /demo/start`, `/demo/inject`, `/demo/reset` — control the baseline and injection stages separately when needed.
+- `GET /bank-demo/state`, `POST /bank-demo/trigger`, `POST /bank-demo/reset` — run and inspect the contained duplicate-debit source-repair demo used by the frontend `/bank` route.
 - `POST /hypotheses`, `POST /ghost-test/rerun` — evaluate hypotheses and verify a simulated fix.
 - `POST /twin/simulate` — compare a candidate route in an isolated twin.
 - `GET /remediation/{incident_id}` — read the simulated fix plan, blast radius, and resolution timeline.

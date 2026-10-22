@@ -15,6 +15,11 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 | POST | `/demo/inject` | Inject the deterministic failure and decoy | Incident Command Centre |
 | POST | `/demo/run` | Start a fresh baseline, inject the failure, and begin investigation in one request | Incident Command Centre |
 | POST | `/demo/reset` | Reset the simulated bank to its known baseline | Incident Command Centre |
+| GET | `/bank-demo/state` | Read the mock-bank account, incident, repair steps, and evidence | Mock bank UI |
+| POST | `/bank-demo/transfer` | Submit a mock-bank transfer through the current source implementation | Mock bank UI |
+| POST | `/bank-demo/report` | Report the failed transfer and start the contained repair workflow | Mock bank UI |
+| POST | `/bank-demo/trigger` | Reproduce the duplicate debit and start the isolated repair agent | Mock bank UI |
+| POST | `/bank-demo/reset` | Restore the known-buggy source and clean customer state | Mock bank UI |
 | GET | `/remediation/{incident_id}` | Read the simulated incident plan, blast radius, approval IDs, and resolution timeline | Incident Command Centre |
 | GET | `/approvals` | List pending/final simulated approvals | Approver UI |
 | GET | `/approvals/{id}` | Read a simulated approval | Approver UI |
@@ -58,6 +63,13 @@ new arrivals while a model run is active. A validated Ghost Test result is
 handed to remediation only after its exact observed route, destination, error,
 and transfer evidence agree. Remediation publishes fix plan, blast radius,
 approval, and resolution records onto the same ordered stream.
+
+The mock-bank flow also publishes its timeout, complaint, incident, diagnosis, patch,
+test, verification, and resolution records onto `/stream`. This keeps `/bank`
+customer-only while the Incident Command Centre shows the repair live. The workflow
+pauses on a Level 3 code approval containing the proposed diff and sandbox results;
+only an approved payload may be applied, tested, verified, and followed by the mock
+duplicate-debit reversal.
 See `docs/observability.md` for configuration and current limits.
 
 ## Runtime persistence boundary

@@ -7,7 +7,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -50,6 +50,7 @@ from avera.api.observe import (
     install_log_capture,
     remove_log_capture,
 )
+from avera.bank_Demo import BankDemoRuntime, build_bank_demo_router
 from avera.remediation.approvals.api import build_router as build_approval_router
 from avera.remediation.integration import RemediationRuntime, build_runtime
 
@@ -161,6 +162,29 @@ def create_app(
     language_model = observability_model if observability_model is not None else configured_model()
     observability = ObservabilityAgent(service, ghost_test_agent, simulated_bank.service_map, language_model)
     service.observation_handlers.append(observability.observe)
+    remediation_runtime: RemediationRuntime = build_runtime(simulated_bank)
+    async def publish_bank_demo_record(
+        object_type: str,
+        payload: dict[str, object],
+    ) -> None:
+        # Incident.opened_at stays stable across lifecycle updates; the envelope
+        # timestamp must advance so each status transition remains a distinct record.
+        await service.ingest(
+            object_type,
+            payload,
+            occurred_at=datetime.now(timezone.utc),
+            source="bank-demo",
+        )
+
+    async def flush_bank_approval_events() -> None:
+        await remediation_runtime.flush_events(service)
+
+    bank_demo = BankDemoRuntime(
+        language_model,
+        publish_event=publish_bank_demo_record,
+        approval_service=remediation_runtime.remediation.approvals,
+        flush_approval_events=flush_bank_approval_events,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -225,6 +249,7 @@ def create_app(
                 await asyncio.gather(task, return_exceptions=True)
             if simulator_started:
                 await simulator_adapter.close()
+            await bank_demo.close()
             if language_model is not None and hasattr(language_model, "close"):
                 await language_model.close()
             if summary_provider is not None and hasattr(summary_provider, "close"):
@@ -280,9 +305,9 @@ def create_app(
     app.state.ghost_test_agent = ghost_test_agent
     app.state.ghost_test_summary_provider = summary_provider
     app.state.observability_agent = observability
+    app.state.bank_demo = bank_demo
     app.state.observability_task = None
     app.state.outbox_task = None
-    remediation_runtime: RemediationRuntime = build_runtime(simulated_bank)
     app.state.remediation_runtime = remediation_runtime
     app.state.active_remediation_case_id = None
     app.state.remediation_error = None
@@ -443,6 +468,7 @@ def create_app(
         after_decision=after_approval_decision,
     ))
     app.include_router(build_observe_router(operational_logs, observe_status_snapshot))
+    app.include_router(build_bank_demo_router(bank_demo))
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
