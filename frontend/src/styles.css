@@ -950,7 +950,21 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 .topology.compact { min-height: 440px; }
 
 /* 3D service map */
-.map3d-host { position: absolute; inset: 0; overflow: hidden; isolation: isolate; }
+.map3d-host { position: absolute; inset: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; isolation: isolate; }
+.map3d-viewport { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.map3d-status-rail { position: relative; z-index: 4; display: grid; grid-template-columns: repeat(3, minmax(0, auto)); justify-content: center; align-items: center; gap: 0; min-height: 42px; padding: 5px 10px; border-bottom: 1px solid color-mix(in srgb, var(--mocha) 16%, var(--line)); background: color-mix(in srgb, var(--white) 88%, var(--soft)); box-shadow: 0 5px 16px rgba(82, 63, 56, .06); pointer-events: none; }
+.map3d-status-rail.is-empty { display: none; }
+.map3d-rail-item { --rail: var(--teal); min-width: 0; display: grid; grid-template-columns: 7px minmax(0, auto); align-items: center; gap: 7px; padding: 2px 14px; border-left: 1px solid var(--line); }
+.map3d-rail-item:first-of-type { border-left: 0; }
+.map3d-rail-item > i { width: 7px; height: 7px; border-radius: 50%; background: var(--rail); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rail) 16%, transparent); }
+.map3d-rail-item b, .map3d-rail-item span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map3d-rail-item b { color: var(--ink); font-size: 9px; line-height: 1.2; }
+.map3d-rail-item span { margin-top: 1px; color: var(--muted); font-size: 7.5px; line-height: 1.2; }
+.map3d-rail-item[data-tone="impact"] { --rail: var(--wine); }
+.map3d-rail-item[data-tone="incident"] { --rail: var(--coral); }
+.map3d-rail-item[data-tone="approval"] { --rail: var(--wine-bright); }
+.map3d-rail-item[data-tone="resolved"] { --rail: var(--teal); }
+.map3d-crowd, .map3d-bug, .map3d-lock { display: none; }
 .map3d-host.twin-mode .map3d-label, .map3d-host.twin-mode .map3d-bug, .map3d-host.twin-mode .map3d-badge { opacity: 0; transition: opacity .4s ease; }
 .map3d-label.offscreen { visibility: hidden; }
 .declutter-hidden { opacity: 0 !important; transition: opacity .25s ease; }
@@ -1047,6 +1061,9 @@ kbd { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; backg
 @media (max-width: 680px) {
   .overview-map-head { padding: 13px 16px; }
   .map3d-slot { height: 330px; }
+  .map3d-status-rail { grid-template-columns: 1fr; justify-content: stretch; padding: 4px 8px; }
+  .map3d-rail-item { padding: 3px 6px; border-left: 0; border-top: 1px solid var(--line); }
+  .map3d-rail-item:first-of-type { border-top: 0; }
   .map-controls button { flex: 1; justify-content: center; }
   .map3d-label .map3d-card { padding: 4px 7px 5px 6px; }
   .map3d-card strong { font-size: 9px; }

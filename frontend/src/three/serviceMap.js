@@ -214,6 +214,16 @@ export class ServiceMap {
     this.host = document.createElement('div');
     this.host.className = 'map3d-host';
 
+    this.statusRail = document.createElement('div');
+    this.statusRail.className = 'map3d-status-rail is-empty';
+    this.statusRail.setAttribute('aria-label', 'Current map status');
+    this.statusRail.innerHTML = ['crowd', 'incident', 'approval'].map((kind) => `<div class="map3d-rail-item" data-rail-item="${kind}" hidden><i></i><div><b></b><span></span></div></div>`).join('');
+    this.railItems = Object.fromEntries([...this.statusRail.querySelectorAll('[data-rail-item]')].map((item) => [item.dataset.railItem, item]));
+
+    this.viewport = document.createElement('div');
+    this.viewport.className = 'map3d-viewport';
+    this.host.append(this.statusRail, this.viewport);
+
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x000000, 0);
@@ -222,11 +232,11 @@ export class ServiceMap {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.domElement.className = 'map3d-canvas';
-    this.host.appendChild(this.renderer.domElement);
+    this.viewport.appendChild(this.renderer.domElement);
 
     this.labels = new CSS2DRenderer();
     this.labels.domElement.className = 'map3d-labels';
-    this.host.appendChild(this.labels.domElement);
+    this.viewport.appendChild(this.labels.domElement);
 
     this.scene = new THREE.Scene();
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -269,7 +279,7 @@ export class ServiceMap {
     this.buildDeclutter();
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.resizeObserver.observe(this.host);
+    this.resizeObserver.observe(this.viewport);
     document.addEventListener('visibilitychange', () => this.updateLoop());
   }
 
@@ -762,9 +772,6 @@ export class ServiceMap {
     const item = (el, kind, priority, active = () => true) => ({ el, kind, priority, active, offset: { x: 0, y: 0 }, target: { x: 0, y: 0 }, hidden: false });
     const nodePriority = { critical: 80, proposed: 75, suspect: 70, patching: 65, watch: 55, cleared: 50, healthy: 45 };
     this.declutterItems = [
-      item(this.bugMarker.element, 'marker', 100, () => state().bug !== 'hidden' && !state().twin),
-      item(this.lock.element, 'marker', 98, () => state().lock !== 'hidden'),
-      item(this.crowdLabel.element, 'marker', 95),
       ...Object.values(this.mascots).map((mascot) => ({ ...item(mascot.bubble.element, 'marker', 0, () => mascot.working), upOnly: true, priorityOf: () => 99 })),
       ...this.twinLabels.map((twinLabel) => item(twinLabel.element, 'marker', 92, () => state().twin)),
       ...[...this.nodes.values()].map((node) => ({ ...item(node.el, 'node', 0, () => !node.offscreen && !state().twin), node })),
@@ -785,7 +792,7 @@ export class ServiceMap {
     if (this.declutterFrame++ % 3 === 0) {
       const placed = [];
       const pad = 5;
-      const frame = this.host.getBoundingClientRect();
+      const frame = this.viewport.getBoundingClientRect();
       // The agents themselves are obstacles: no label, their own bubbles included, may sit on top of one.
       Object.values(this.mascots).forEach((mascot) => {
         if (mascot.size < 0.2) return;
@@ -978,7 +985,7 @@ export class ServiceMap {
   }
 
   resize() {
-    const rect = this.host.getBoundingClientRect();
+    const rect = this.viewport.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     const changed = Math.abs(rect.width - (this.width || 0)) > 1 || Math.abs(rect.height - (this.height || 0)) > 1;
     this.width = rect.width;
@@ -1107,6 +1114,16 @@ export class ServiceMap {
     el.innerHTML = `<div><b>${hypothesis.id}</b><span>${hypothesis.short || data.short || ''}</span></div><div><i><u style="width:${score}%"></u><s></s></i><em>${hypothesis.state === 'proven' ? '✓ ' : hypothesis.state === 'ruled' ? '✕ ' : ''}${value}</em></div>`;
   }
 
+  setRailItem(kind, { visible, tone = kind, title = '', detail = '' }) {
+    const item = this.railItems[kind];
+    if (!item) return;
+    item.hidden = !visible;
+    item.dataset.tone = tone;
+    item.querySelector('b').textContent = title;
+    item.querySelector('span').textContent = detail;
+    this.statusRail.classList.toggle('is-empty', Object.values(this.railItems).every((entry) => entry.hidden));
+  }
+
   renderCrowdLabel(customers) {
     const { affected, complained } = this.fixture.impact;
     const silent = Math.max(0, affected - complained);
@@ -1119,6 +1136,12 @@ export class ServiceMap {
       ? `${format.format(complained)} reported · ${format.format(silent)} silent`
       : customers.detail;
     this.crowdLabel.element.innerHTML = `<div class="map3d-card"><small><span class="map-full-copy">${affected ? `${format.format(affected)} customers` : 'Customers'} sending to Bank X</span><span class="map-compact-copy">${affected ? `${format.format(affected)} customers · Bank X` : 'Customers · Bank X'}</span></small><strong>${customers.caption}</strong><span><span class="map-full-copy">${customers.detail}</span><span class="map-compact-copy">${compactDetail}</span></span>${counts}</div>`;
+    this.setRailItem('crowd', {
+      visible: customers.affected >= 1 || customers.notified,
+      tone: customers.notified ? 'resolved' : 'impact',
+      title: customers.caption,
+      detail: `${format.format(affected)} customers · ${compactDetail}`,
+    });
   }
 
   renderBug(mode) {
@@ -1131,6 +1154,12 @@ export class ServiceMap {
       bypassed: `<div class="map3d-card"><b>Bypassed</b><span><span class="map-full-copy">Bank X now routes via Gateway C</span><span class="map-compact-copy">Bank X via Gateway C</span></span></div>`,
     }[mode];
     el.innerHTML = copy;
+    this.setRailItem('incident', {
+      visible: mode !== 'hidden',
+      tone: mode === 'bypassed' ? 'resolved' : 'incident',
+      title: mode === 'alert' ? 'ACK timeout' : mode === 'silent' ? 'Acknowledgements stopped' : 'Gateway B bypassed',
+      detail: mode === 'bypassed' ? 'Bank X now routes through Gateway C' : 'Gateway B → Bank X',
+    });
   }
 
   renderLock(mode) {
@@ -1140,6 +1169,12 @@ export class ServiceMap {
     el.innerHTML = mode === 'hidden' ? '' : mode === 'pending'
       ? `<div class="map3d-card">${LOCK_ICON}<div><b>Awaiting engineer approval</b><span><span class="map-full-copy">${approval.id} · reroute to Gateway C</span><span class="map-compact-copy">Reroute to Gateway C</span></span></div></div>`
       : `<div class="map3d-card">${UNLOCK_ICON}<div><b>Approved and applied</b><span><span class="map-full-copy">${approval.id} · Ghost Tests rerun green</span><span class="map-compact-copy">Gateway C verified</span></span></div></div>`;
+    this.setRailItem('approval', {
+      visible: mode !== 'hidden',
+      tone: mode === 'pending' ? 'approval' : 'resolved',
+      title: mode === 'pending' ? 'Engineer approval required' : 'Reroute approved',
+      detail: mode === 'pending' ? 'Reroute Bank X to Gateway C' : 'Gateway C verified green',
+    });
   }
 
   // Working agents walk to the problem they own; everyone else, and everyone once done, goes back to their post.
