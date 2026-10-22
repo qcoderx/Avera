@@ -14,58 +14,62 @@ from pathlib import Path
 from uuid import uuid4
 
 
-BUGGY_SOURCE = '''"""Idempotency policy for outbound bank transfers."""
+BUGGY_SOURCE = '''"""Gateway routing policy for outbound Bank X transfers."""
 
 
-def build_idempotency_key(transfer_intent_id: str, attempt: int) -> str:
-    """Return the provider key for one delivery attempt."""
-    if not transfer_intent_id:
-        raise ValueError("transfer_intent_id is required")
-    if attempt < 1:
-        raise ValueError("attempt must be positive")
+def select_gateway(destination_bank: str, gateway_a_healthy: bool) -> str:
+    """Choose the active route for a destination bank."""
+    if not destination_bank:
+        raise ValueError("destination_bank is required")
+    if destination_bank != "BANK_X":
+        raise ValueError("only BANK_X is supported in this demo")
 
-    # BUG: a timeout retry becomes a new payment instead of the same intent.
-    return f"{transfer_intent_id}:{attempt}"
+    if gateway_a_healthy:
+        return "gateway_a.bank_x"
+
+    # BUG: Bank X remains pinned to Gateway A after its health check fails.
+    return "gateway_a.bank_x"
 '''
 
 
-SAFE_SOURCE = '''"""Idempotency policy for outbound bank transfers."""
+SAFE_SOURCE = '''"""Gateway routing policy for outbound Bank X transfers."""
 
 
-def build_idempotency_key(transfer_intent_id: str, attempt: int) -> str:
-    """Return one stable provider key for every retry of an intent."""
-    if not transfer_intent_id:
-        raise ValueError("transfer_intent_id is required")
-    if attempt < 1:
-        raise ValueError("attempt must be positive")
+def select_gateway(destination_bank: str, gateway_a_healthy: bool) -> str:
+    """Choose the active route for a destination bank."""
+    if not destination_bank:
+        raise ValueError("destination_bank is required")
+    if destination_bank != "BANK_X":
+        raise ValueError("only BANK_X is supported in this demo")
 
-    return transfer_intent_id
+    if gateway_a_healthy:
+        return "gateway_a.bank_x"
+
+    return "gateway_b.bank_x"
 '''
 
 
-TEST_SOURCE = '''"""Regression tests for outbound transfer idempotency."""
+TEST_SOURCE = '''"""Regression tests for outbound gateway routing."""
 
 import unittest
 
-from transfer_service import build_idempotency_key
+from transfer_service import select_gateway
 
 
-class TransferIdempotencyTests(unittest.TestCase):
-    def test_timeout_retry_reuses_the_original_intent_key(self):
-        first = build_idempotency_key("intent-bank-x-001", 1)
-        retry = build_idempotency_key("intent-bank-x-001", 2)
-        self.assertEqual(first, retry)
+class TransferGatewayRoutingTests(unittest.TestCase):
+    def test_bank_x_fails_over_when_gateway_a_is_unhealthy(self):
+        route = select_gateway("BANK_X", gateway_a_healthy=False)
+        self.assertEqual(route, "gateway_b.bank_x")
 
-    def test_new_transfer_intent_gets_a_different_key(self):
-        first = build_idempotency_key("intent-bank-x-001", 1)
-        second = build_idempotency_key("intent-bank-x-002", 1)
-        self.assertNotEqual(first, second)
+    def test_bank_x_stays_on_gateway_a_while_it_is_healthy(self):
+        route = select_gateway("BANK_X", gateway_a_healthy=True)
+        self.assertEqual(route, "gateway_a.bank_x")
 
-    def test_invalid_inputs_are_rejected(self):
+    def test_unknown_destinations_are_rejected(self):
         with self.assertRaises(ValueError):
-            build_idempotency_key("", 1)
+            select_gateway("", gateway_a_healthy=False)
         with self.assertRaises(ValueError):
-            build_idempotency_key("intent-bank-x-001", 0)
+            select_gateway("BANK_Y", gateway_a_healthy=False)
 
 
 if __name__ == "__main__":
@@ -134,7 +138,7 @@ class RepairWorkspace:
         allowed = {
             ast.Module, ast.Expr, ast.Constant, ast.FunctionDef, ast.arguments,
             ast.arg, ast.If, ast.UnaryOp, ast.Not, ast.Name, ast.Load, ast.Raise,
-            ast.Call, ast.Compare, ast.Lt, ast.Return,
+            ast.Call, ast.Compare, ast.NotEq, ast.Return,
         }
         for node in ast.walk(tree):
             if type(node) not in allowed:
@@ -145,27 +149,27 @@ class RepairWorkspace:
                 raise UnsafeRepair("source may only call ValueError")
 
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
-        if len(functions) != 1 or functions[0].name != "build_idempotency_key":
-            raise UnsafeRepair("source must define only build_idempotency_key")
-        if [arg.arg for arg in functions[0].args.args] != ["transfer_intent_id", "attempt"]:
-            raise UnsafeRepair("idempotency function signature changed")
+        if len(functions) != 1 or functions[0].name != "select_gateway":
+            raise UnsafeRepair("source must define only select_gateway")
+        if [arg.arg for arg in functions[0].args.args] != ["destination_bank", "gateway_a_healthy"]:
+            raise UnsafeRepair("gateway routing function signature changed")
 
-        namespace = {"__builtins__": {"ValueError": ValueError, "str": str, "int": int}}
+        namespace = {"__builtins__": {"ValueError": ValueError, "str": str, "bool": bool}}
         exec(compile(tree, "<bank-demo-repair>", "exec"), namespace)
-        function = namespace["build_idempotency_key"]
-        if function("intent-a", 1) != function("intent-a", 2):
-            raise UnsafeRepair("retry key is still unstable")
-        if function("intent-a", 1) == function("intent-b", 1):
-            raise UnsafeRepair("different transfer intents share a key")
+        function = namespace["select_gateway"]
+        if function("BANK_X", False) != "gateway_b.bank_x":
+            raise UnsafeRepair("failed Gateway A does not fail over to Gateway B")
+        if function("BANK_X", True) != "gateway_a.bank_x":
+            raise UnsafeRepair("healthy Gateway A route changed unexpectedly")
 
-    def idempotency_key(self, intent_id: str, attempt: int) -> str:
+    def gateway_route(self, destination_bank: str, *, gateway_a_healthy: bool) -> str:
         name = f"avera_bank_demo_transfer_{uuid4().hex}"
         spec = importlib.util.spec_from_file_location(name, self.source_path)
         if spec is None or spec.loader is None:
             raise RuntimeError("could not load transfer service")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return module.build_idempotency_key(intent_id, attempt)
+        return module.select_gateway(destination_bank, gateway_a_healthy)
 
     def run_tests(self) -> TestRun:
         command = f"{Path(sys.executable).name} -m unittest -v test_transfer_service.py"

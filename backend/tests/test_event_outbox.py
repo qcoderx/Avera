@@ -109,3 +109,18 @@ def test_bulk_ingestion_preserves_order_and_defers_delivery():
         assert await repository.outbox_pending_count() == 0
 
     asyncio.run(scenario())
+
+
+def test_recent_stream_window_returns_only_the_ordered_tail():
+    async def scenario():
+        repository = InMemoryEventRepository()
+        service = EventStreamService(repository, FlakyBus())
+        for index in range(1, 8):
+            await service.ingest("event", payload(f"tail-{index}"))
+
+        recent = await service.recent_records(limit=3)
+
+        assert [record.sequence for record in recent] == [5, 6, 7]
+        assert [record.data["id"] for record in recent] == ["tail-5", "tail-6", "tail-7"]
+
+    asyncio.run(scenario())

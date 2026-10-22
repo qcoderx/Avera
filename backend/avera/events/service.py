@@ -157,6 +157,9 @@ class EventStreamService:
     async def records_after(self, sequence: int, *, limit: int = 500) -> list[StreamRecord]:
         return await self.repository.list_after(sequence, limit=limit)
 
+    async def recent_records(self, *, limit: int = 100) -> list[StreamRecord]:
+        return await self.repository.list_recent(limit=limit)
+
     async def replay(self, fixture_path: Path | None = None) -> ReplaySummary:
         path = fixture_path or Path(__file__).resolve().parents[1] / "fixtures" / "full_incident_stream.json"
         fixture = IncidentFixture.model_validate_json(path.read_text(encoding="utf-8"))

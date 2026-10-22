@@ -632,9 +632,11 @@ def create_app(
     async def stream(
         request: Request,
         after: int | None = Query(default=None, ge=0),
+        history: int = Query(default=100, ge=10, le=500),
         last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     ) -> StreamingResponse:
         cursor = after or 0
+        initial_tail = after is None and last_event_id is None
         if last_event_id is not None:
             try:
                 cursor = int(last_event_id)
@@ -647,9 +649,14 @@ def create_app(
 
         async def generate():
             queue = service.stream_queue()
+            first_batch = True
             try:
                 while not await request.is_disconnected():
-                    records = await service.records_after(stream_cursor[0])
+                    if initial_tail and first_batch:
+                        records = await service.recent_records(limit=history)
+                        first_batch = False
+                    else:
+                        records = await service.records_after(stream_cursor[0])
                     if records:
                         for record in records:
                             if record.sequence <= stream_cursor[0]:

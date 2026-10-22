@@ -25,6 +25,8 @@ class EventRepository(Protocol):
 
     async def list_after(self, sequence: int, *, limit: int = 500) -> list[StreamRecord]: ...
 
+    async def list_recent(self, *, limit: int = 100) -> list[StreamRecord]: ...
+
     async def claim_outbox(self, *, limit: int = 100) -> list["OutboxItem"]: ...
 
     async def finish_outbox(
@@ -110,6 +112,12 @@ class InMemoryEventRepository:
             raise ValueError("sequence must be non-negative and limit must be positive")
         async with self._lock:
             return [item for item in self._records if item.sequence > sequence][:limit]
+
+    async def list_recent(self, *, limit: int = 100) -> list[StreamRecord]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        async with self._lock:
+            return list(self._records[-limit:])
 
     async def claim_outbox(self, *, limit: int = 100) -> list[OutboxItem]:
         if limit < 1:
@@ -318,6 +326,26 @@ class PostgresEventRepository:
                 LIMIT $2
                 """,
                 sequence,
+                limit,
+            )
+        return [self._to_record(row) for row in rows]
+
+    async def list_recent(self, *, limit: int = 100) -> list[StreamRecord]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            rows = await connection.fetch(
+                """
+                SELECT sequence, object_type, occurred_at, data
+                FROM (
+                    SELECT sequence, object_type, occurred_at, data
+                    FROM avera_stream_records
+                    ORDER BY sequence DESC
+                    LIMIT $1
+                ) AS recent
+                ORDER BY sequence ASC
+                """,
                 limit,
             )
         return [self._to_record(row) for row in rows]

@@ -1,6 +1,6 @@
 # Avera API contract — Module 1
 
-The following routes are the shared interface from `private/Avera_Work_Split.pdf`. `GET /stream` emits the contract object types from `contracts.py` as ordered Server-Sent Events. Each SSE `id` is the monotonically increasing stream sequence; `event` is the contract type; `data` is one JSON `StreamRecord`. Clients may reconnect with `Last-Event-ID` and receive later records. Fixture replay and live mode use the same envelope.
+The following routes are the shared interface from `private/Avera_Work_Split.pdf`. `GET /stream` emits the contract object types from `contracts.py` as ordered Server-Sent Events. Each SSE `id` is the monotonically increasing stream sequence; `event` is the contract type; `data` is one JSON `StreamRecord`. A fresh connection receives the latest 100 records by default instead of replaying the full database; `history` may select 10–500 records. Clients that supply `after` or reconnect with `Last-Event-ID` receive every later record in order. Fixture replay and live mode use the same envelope.
 
 | Method | Route | Purpose | Main caller |
 |---|---|---|---|
@@ -64,12 +64,12 @@ handed to remediation only after its exact observed route, destination, error,
 and transfer evidence agree. Remediation publishes fix plan, blast radius,
 approval, and resolution records onto the same ordered stream.
 
-The mock-bank flow also publishes its timeout, complaint, incident, diagnosis, patch,
+The mock-bank flow also publishes its Gateway A timeout, four correlated complaints, incident, diagnosis, patch,
 test, verification, and resolution records onto `/stream`. This keeps `/bank`
 customer-only while the Incident Command Centre shows the repair live. The workflow
 pauses on a Level 3 code approval containing the proposed diff and sandbox results;
-only an approved payload may be applied, tested, verified, and followed by the mock
-duplicate-debit reversal.
+only an approved payload may fail Bank X over to Gateway B, be tested and verified,
+and be followed by the mock duplicate-debit reversal.
 See `docs/observability.md` for configuration and current limits.
 
 ## Runtime persistence boundary

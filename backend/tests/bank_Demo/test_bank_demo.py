@@ -11,7 +11,7 @@ from avera.bank_Demo.workspace import BUGGY_SOURCE, RepairWorkspace, UnsafeRepai
 
 
 @pytest.mark.asyncio
-async def test_duplicate_debit_is_reproduced_then_repaired_in_real_source(tmp_path) -> None:
+async def test_failed_gateway_is_reproduced_then_rerouted_in_real_source(tmp_path) -> None:
     workspace = RepairWorkspace(tmp_path)
     published = []
 
@@ -26,6 +26,7 @@ async def test_duplicate_debit_is_reproduced_then_repaired_in_real_source(tmp_pa
     assert triggered["status"] == "awaiting_report"
     assert triggered["transfer"]["attempts"] == 2
     assert triggered["transfer"]["debits"] == 2
+    assert triggered["transfer"]["route"] == "gateway_a.bank_x"
     assert triggered["account"]["balance_ngn"] == 435_300
 
     await runtime.report_issue("I was debited twice after my transfer timed out.")
@@ -38,14 +39,15 @@ async def test_duplicate_debit_is_reproduced_then_repaired_in_real_source(tmp_pa
     assert resolved["ledger"][0]["direction"] == "credit"
     assert resolved["ledger"][0]["amount_ngn"] == 25_000
     assert resolved["report"]["tests_passed"] == 3
-    assert resolved["report"]["verification"] == "1 transfer intent · 2 delivery attempts · 1 debit"
+    assert resolved["report"]["verification"] == "Gateway A failed · Bank X rerouted to Gateway B · 1 debit"
+    assert "Gateway A" in resolved["report"]["root_cause"]
     assert resolved["report"]["files_changed"] == ["bank_Demo/workspace/transfer_service.py"]
     assert workspace.read_source() != BUGGY_SOURCE
     assert workspace.run_tests().passed is True
 
     published_types = [object_type for object_type, _ in published]
-    assert published_types[:5] == ["event"] * 5
-    assert "complaint" in published_types
+    assert published_types[:3] == ["event"] * 3
+    assert published_types.count("complaint") == 4
     assert "incident" in published_types
     assert "hypothesis" in published_types
     assert "test_result" in published_types
@@ -67,6 +69,7 @@ async def test_duplicate_debit_is_reproduced_then_repaired_in_real_source(tmp_pa
 
     next_transfer = await runtime.transfer()
     assert next_transfer["transfer"]["debits"] == 1
+    assert next_transfer["transfer"]["route"] == "gateway_b.bank_x"
     assert next_transfer["account"]["balance_ngn"] == 435_300
 
 
@@ -74,9 +77,9 @@ def test_repair_workspace_rejects_source_with_external_capabilities(tmp_path) ->
     workspace = RepairWorkspace(tmp_path)
     malicious = """import os
 
-def build_idempotency_key(transfer_intent_id: str, attempt: int) -> str:
+def select_gateway(destination_bank: str, gateway_a_healthy: bool) -> str:
     os.remove('/tmp/example')
-    return transfer_intent_id
+    return "gateway_b.bank_x"
 """
     with pytest.raises(UnsafeRepair):
         workspace.write_source(malicious)
@@ -121,6 +124,7 @@ def test_bank_demo_api_triggers_and_completes_the_full_flow(monkeypatch) -> None
         assert pending["payload"]["target"] == "bank_Demo/workspace/transfer_service.py"
         assert pending["payload"]["sandbox"]["tests_run"] == 3
         assert pending["payload"]["diff"]
+        assert "Gateway B" in pending["payload"]["summary"]
 
         decision = client.post(
             f"/approvals/{pending['id']}",
@@ -138,6 +142,7 @@ def test_bank_demo_api_triggers_and_completes_the_full_flow(monkeypatch) -> None
         assert state["status"] == "resolved"
         assert state["account"]["balance_ngn"] == 460_300
         assert state["report"]["tests_passed"] == 3
+        assert state["report"]["verification"].endswith("1 debit")
         assert all(step["status"] == "complete" for step in state["steps"])
 
         stream_records = client.app.state.event_repository._records

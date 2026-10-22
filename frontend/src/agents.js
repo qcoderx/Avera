@@ -1,7 +1,7 @@
 // The four Avera agents, looping and answering, we need the agents comunicating. Let's go!
 
 import { claimParts } from './prose.js';
-import { naira } from './live.js';
+import { naira, pretty } from './live.js';
 
 export const AGENTS = [
   { id: 'observability', name: 'Observability', short: 'Obs', color: '#1EA896', role: 'Signal fusion' },
@@ -17,6 +17,9 @@ const HEARTBEAT_MS = 5000;
 // How long each displayed stage holds before the next handoff. Validation is the slowest on
 // purpose: Ghost Test works through every hypothesis where engineers can follow it.
 const DWELL_MS = { 0: 4000, 1: 9000, 2: 11000, 3: 18000, 4: 10000, 5: 6000 };
+// The bank demo holds four investigation handoffs for roughly 3.5 seconds each,
+// then spends one final second on approved verification: about 15 seconds total.
+const BANK_DEMO_DWELL_MS = { 0: 1000, 1: 3500, 2: 3500, 3: 3500, 4: 3500, 5: 1000 };
 
 const n = (value) => Number(value || 0).toLocaleString('en-NG');
 
@@ -24,6 +27,9 @@ function facts(D, ctx) {
   const run = ctx.run;
   const validated = D.hypotheses.find((item) => item.state === 'validated');
   const pending = D.approvals.filter((item) => item.status === 'pending' || (!D.live && item.status === undefined));
+  const bankDemo = /^INC-BANK-/.test(D.incident.id);
+  const failedGateway = run?.incident?.groups?.find((group) => group.failures > 0)?.gateway;
+  const verification = run?.resolutions.find((item) => item.action === 'verify_bank_transfer_journey');
   return {
     run,
     started: run ? run.started : true,
@@ -49,6 +55,9 @@ function facts(D, ctx) {
     resolved: run ? run.resolutions.some((item) => item.status === 'resolved') : D.step === 6,
     investigating: ctx.obsState === 'investigating',
     degraded: ctx.obsState === 'degraded',
+    bankDemo,
+    failedGateway: pretty(failedGateway || 'gateway_a'),
+    verifiedRoute: pretty(verification?.detail?.verified_route || 'gateway_b.bank_x'),
   };
 }
 
@@ -69,15 +78,15 @@ export function agentStatuses(D, step, ctx) {
     ] };
   } else if (step === 1) {
     status.observability = { mode: 'working', headline: 'Noticing a pattern', lines: [
-      `I'm seeing ${n(f.timeouts)} acknowledgement timeouts on Gateway B → Bank X.`,
+      f.bankDemo ? `I'm seeing failed transfers and duplicate debits on ${f.failedGateway} → Bank X.` : `I'm seeing ${n(f.timeouts)} acknowledgement timeouts on Gateway B → Bank X.`,
       `${n(f.complaints)} customers have complained about hanging transfers.${f.lastComplaint ? ` Latest: “${f.lastComplaint}”` : ''}`,
-      `Customers are retrying (${n(f.retries)}) and switching to USSD (${n(f.switches)}). Correlating these signals now.`,
+      f.bankDemo ? 'The reports describe the same pattern: one failed transfer and two debits. Correlating them now.' : `Customers are retrying (${n(f.retries)}) and switching to USSD (${n(f.switches)}). Correlating these signals now.`,
       f.degraded ? 'My language model is not configured, so I cannot propose hypotheses yet.' : f.investigating ? 'Asking the model for competing explanations of the failure…' : 'Grouping signals by route, destination and app version…',
     ] };
   } else if (step === 2) {
     status.observability = { mode: 'working', headline: 'Investigating', lines: [
       `Incident ${f.incidentId} is open. ${n(f.signals)} signals fused into one fingerprint.`,
-      `Marking ${f.zones} suspect zones, including the app release that shipped at the same time.`,
+      f.bankDemo ? `All ${n(f.complaints)} complaints converge on the ${f.failedGateway} route to Bank X.` : `Marking ${f.zones} suspect zones, including the app release that shipped at the same time.`,
       `Writing a disproof condition for each of my ${f.hypotheses.length || 'competing'} hypotheses so Ghost Test can try to break them.`,
     ] };
   } else {
@@ -102,7 +111,7 @@ export function agentStatuses(D, step, ctx) {
     const v = f.validated;
     status.ghost = { mode: 'done', headline: step === 6 ? 'Verified the fix' : 'Validated', lines: [
       v ? `${v.id} ${v.zone} survived every disproof check at ${v.confidence}%. Handed to Blast Radius.` : 'No hypothesis cleared 85%. Sending them back to Observability.',
-      `Ruled out ${f.decoys.length} decoys${f.decoys.some((item) => /app/i.test(item.zone)) ? ', including the app release' : ''}.`,
+      f.bankDemo ? `Validated that Bank X remained pinned to ${f.failedGateway} after its health check failed.` : `Ruled out ${f.decoys.length} decoys${f.decoys.some((item) => /app/i.test(item.zone)) ? ', including the app release' : ''}.`,
       ...(step === 6 ? [f.rerunPassed ? 'Reran the original test after the reroute: the failure no longer reproduces.' : 'Post-fix rerun is still pending.'] : []),
     ] };
   }
@@ -138,7 +147,7 @@ export function agentStatuses(D, step, ctx) {
     ] };
   } else {
     status.resolution = { mode: 'done', headline: 'Resolved', lines: [
-      'Reroute applied: Bank X transfers now flow through Gateway C.',
+      f.bankDemo ? `Failover applied: Bank X transfers now use ${f.verifiedRoute}.` : 'Reroute applied: Bank X transfers now flow through Gateway C.',
       f.rerunPassed ? 'Ghost Test rerun passed. Incident resolved and saved to memory.' : 'Verifying the fix with a Ghost Test rerun…',
       `Follow-ups open: ${f.pending.length ? `${f.pending.length} approvals including the connector patch` : 'connector patch review and reconciliation'}.`,
     ] };
@@ -149,7 +158,7 @@ export function agentStatuses(D, step, ctx) {
     status.ghost = { mode: 'done', headline: 'Done', lines: [f.rerunPassed ? 'Done. The fix is verified: the failure no longer reproduces.' : 'Done validating. The post-fix rerun is still pending.'] };
     status.blast = { mode: 'done', headline: 'Done', lines: [`Done. ${n(f.impact.affected)} customers found and told first.`] };
     status.resolution = { mode: 'done', headline: 'Done', lines: [
-      'Done. Bank X transfers now flow through Gateway C and the incident is resolved.',
+      f.bankDemo ? `Done. Bank X transfers now use ${f.verifiedRoute} and the incident is resolved.` : 'Done. Bank X transfers now flow through Gateway C and the incident is resolved.',
       `Follow-ups still open: ${f.pending.length ? `${f.pending.length} approvals, including the connector patch` : 'connector patch review and reconciliation'}.`,
     ] };
   }
@@ -225,8 +234,9 @@ export class AgentDirector {
   }
 
   advance() {
-    const { paced, quiet } = this.source();
-    const target = this.target();
+    const snapshot = this.source();
+    const { paced, quiet } = snapshot;
+    const target = snapshot.step;
     if (!paced) {
       if (target !== this.displayStep) this.setDisplay(target, !quiet && target === this.displayStep + 1);
       return;
@@ -234,7 +244,7 @@ export class AgentDirector {
     if (!this.synced) return;
     if (target < this.displayStep) {
       this.setDisplay(target, false);
-    } else if (target > this.displayStep && Date.now() - this.stepSince >= (DWELL_MS[this.displayStep] ?? 8000)) {
+    } else if (target > this.displayStep && Date.now() - this.stepSince >= ((/^INC-BANK-/.test(snapshot.ctx.run?.incident?.id) ? BANK_DEMO_DWELL_MS : DWELL_MS)[this.displayStep] ?? 8000)) {
       this.setDisplay(this.displayStep + 1, true);
     }
   }
@@ -252,7 +262,10 @@ export class AgentDirector {
       const item = this.handoffQueue.shift();
       if (!item) return;
       this.post(item[0], item[1], 'handoff');
-      if (this.handoffQueue.length) this.handoffTimer = window.setTimeout(next, 1400);
+      if (this.handoffQueue.length) {
+        const fast = /^INC-BANK-/.test(this.source().ctx.run?.incident?.id);
+        this.handoffTimer = window.setTimeout(next, fast ? 250 : 1400);
+      }
     };
     next();
     this.emit('step');

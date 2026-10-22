@@ -291,7 +291,7 @@ function resolutionText(event) {
     open_connector_patch_for_review: 'Connector patch opened for engineer review',
     reproduce_bank_transfer_failure: 'Duplicate debit reproduced in the isolated bank workspace',
     review_bank_transfer_patch: 'Transfer patch prepared for engineer review',
-    apply_bank_transfer_patch: 'Transfer idempotency patch applied',
+    apply_bank_transfer_patch: 'Bank X failover patch applied',
     run_bank_regression_tests: 'Transfer regression suite passed',
     verify_bank_transfer_journey: 'Timed-out transfer journey verified with one debit',
     reverse_duplicate_debit: `Duplicate debit reversed${detail.amount_ngn ? ` · ₦${Number(detail.amount_ngn).toLocaleString('en-NG')}` : ''}`,

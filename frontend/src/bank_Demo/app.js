@@ -85,14 +85,14 @@ function transferScreen() {
 
 function reportSheet() {
   if (!reportOpen) return '';
-  const defaultText = bank.status === 'awaiting_report' ? `I made one ${naira(bank.transfer.amount_ngn)} transfer, it timed out, and I can see two debits.` : '';
+  const defaultText = bank.status === 'awaiting_report' ? `I sent ${naira(bank.transfer.amount_ngn)} to my friend, it did not go through, and I can see two debits.` : '';
   return `<div class="sheet-backdrop" data-action="close-report"><section class="report-sheet" role="dialog" aria-modal="true" aria-labelledby="report-title"><div class="sheet-handle"></div><div class="sheet-heading"><div><h2 id="report-title">Report an issue</h2><p>Tell us what happened with your account.</p></div><button data-action="close-report" aria-label="Close">${icon('close', 19)}</button></div><form id="report-form"><label><span>What happened?</span><textarea name="complaint" minlength="10" maxlength="500" required>${escapeHtml(defaultText)}</textarea></label><button type="submit" ${busy || bank.status !== 'awaiting_report' ? 'disabled' : ''}>${busy ? 'Sending…' : bank.status === 'awaiting_report' ? 'Send report' : 'No issue to report'}</button></form></section></div>`;
 }
 
 function resultSheet() {
   if (!transferResult) return '';
   const failed = transferResult === 'timeout';
-  return `<div class="sheet-backdrop result-backdrop"><section class="result-sheet" role="dialog" aria-modal="true"><span class="result-mark ${failed ? 'failed' : ''}">${icon(failed ? 'close' : 'check', 28)}</span><h2>${failed ? 'We couldn’t confirm this transfer' : 'Transfer sent'}</h2><p>${failed ? 'The request timed out. Check your activity before trying again.' : `Your ${naira(bank.transfer.amount_ngn)} transfer to Tobi Adeyemi was successful.`}</p><button data-action="dismiss-result">${failed ? 'View account activity' : 'Done'}</button></section></div>`;
+  return `<div class="sheet-backdrop result-backdrop"><section class="result-sheet" role="dialog" aria-modal="true"><span class="result-mark ${failed ? 'failed' : ''}">${icon(failed ? 'close' : 'check', 28)}</span><h2>${failed ? 'We couldn’t confirm this transfer' : 'Transfer sent'}</h2><p>${failed ? 'The request timed out and your activity shows two debits. Report this transfer so we can investigate it.' : `Your ${naira(bank.transfer.amount_ngn)} transfer to Tobi Adeyemi was successful.`}</p><button data-action="${failed ? 'report-transfer' : 'dismiss-result'}">${failed ? 'Report this transfer' : 'Done'}</button></section></div>`;
 }
 
 function render() {
@@ -160,6 +160,7 @@ app.addEventListener('click', (event) => {
   if (action === 'open-report') { reportOpen = true; render(); }
   if (action === 'close-report' && (event.target === button || button.tagName === 'BUTTON')) { reportOpen = false; render(); }
   if (action === 'dismiss-result') { transferResult = null; screen = 'home'; render(); }
+  if (action === 'report-transfer') { transferResult = null; screen = 'home'; reportOpen = true; render(); }
   if (action === 'reset') resetDemo();
 });
 

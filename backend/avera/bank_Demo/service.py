@@ -49,7 +49,8 @@ class BankDemoRuntime:
         self.publish_event = publish_event
         self.approval_service = approval_service
         self.flush_approval_events = flush_approval_events
-        self.step_delay = max(0.0, float(os.getenv("AVERA_BANK_DEMO_STEP_DELAY", "0.7")))
+        self.step_delay = max(0.0, float(os.getenv("AVERA_BANK_DEMO_STEP_DELAY", "0.1")))
+        self.model_timeout = max(1.0, float(os.getenv("AVERA_BANK_DEMO_MODEL_TIMEOUT", "4")))
         self._lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         self._approval_id: str | None = None
@@ -131,14 +132,11 @@ class BankDemoRuntime:
         opening_balance_ngn: int = STARTING_BALANCE_NGN,
         existing_ledger: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
-        seen: set[str] = set()
         ledger: list[dict[str, object]] = []
         balance = opening_balance_ngn
-        for attempt in (1, 2):
-            key = self.workspace.idempotency_key(intent_id, attempt)
-            if key in seen:
-                continue
-            seen.add(key)
+        route = self.workspace.gateway_route("BANK_X", gateway_a_healthy=False)
+        attempts = 2 if route == "gateway_a.bank_x" else 1
+        for attempt in range(1, attempts + 1):
             balance -= amount_ngn
             ledger.append({
                 "id": f"TXN-{intent_id[-4:]}-{attempt}",
@@ -147,13 +145,14 @@ class BankDemoRuntime:
                 "amount_ngn": amount_ngn,
                 "direction": "debit",
                 "status": "completed",
-                "idempotency_key": key,
+                "gateway_route": route,
             })
         return {
             "balance_ngn": balance,
             "debits": len(ledger),
+            "attempts": attempts,
             "ledger": ledger + (existing_ledger or self._background_activity()),
-            "keys": sorted(seen),
+            "route": route,
         }
 
     async def state(self) -> dict[str, object]:
@@ -174,7 +173,9 @@ class BankDemoRuntime:
         code: str,
         *,
         payload: dict[str, object] | None = None,
-        service: str = "transfer-service",
+        service: str = "gateway_a",
+        route: str = "gateway_a.bank_x",
+        customer_token: str = "cust-demo-amara",
     ) -> dict[str, object]:
         return {
             "id": event_id,
@@ -182,10 +183,10 @@ class BankDemoRuntime:
             "source": "mock-bank",
             "channel": "mobile",
             "service": service,
-            "route": "transfer-service.bank_x",
+            "route": route,
             "code": code,
             "latency_ms": 1_200 if code == "ACK_TIMEOUT" else 42,
-            "customer_token": "cust-demo-amara",
+            "customer_token": customer_token,
             "payload": payload or {},
         }
 
@@ -200,21 +201,23 @@ class BankDemoRuntime:
             "signals": [
                 f"bank-{suffix}-transfer",
                 f"bank-{suffix}-timeout",
-                f"bank-{suffix}-retry",
                 f"bank-{suffix}-duplicate",
                 f"complaint-{suffix}",
+                f"complaint-{suffix}-02",
+                f"complaint-{suffix}-03",
+                f"complaint-{suffix}-04",
             ],
             "fingerprint": {
                 "groups": [{
-                    "gateway": "transfer-service",
+                    "gateway": "gateway_a",
                     "destination": "BANK_X",
-                    "failures": 2,
+                    "failures": 4,
                     "successes": 0,
                 }],
-                "behaviours": [{"kind": "retries", "count": 1}],
-                "symptom": "duplicate debit after acknowledgement timeout",
+                "behaviours": [{"kind": "route_stuck_after_health_failure", "count": 4}],
+                "symptom": "duplicate debits while Gateway A is unavailable",
             },
-            "suspect_zones": ["transfer_idempotency", "provider_retry"],
+            "suspect_zones": ["gateway_a", "payments_integration"],
         }
 
     async def _emit_resolution(
@@ -269,7 +272,7 @@ class BankDemoRuntime:
                 hypothesis_id=hypothesis_id,
                 repository="Avera mock bank",
                 target=self.workspace.display_source_path,
-                summary="Make timeout retries reuse the original transfer idempotency key.",
+                summary="Fail Bank X traffic over to Gateway B while Gateway A is unhealthy.",
                 diff=proposed_diff,
                 sandbox=SandboxReport(
                     passed=True,
@@ -332,8 +335,9 @@ class BankDemoRuntime:
                 "transfer": {
                     "amount_ngn": amount_ngn,
                     "intent_id": intent_id,
-                    "attempts": 2,
+                    "attempts": reproduced["attempts"],
                     "debits": reproduced["debits"],
+                    "route": reproduced["route"],
                 },
                 "ledger": reproduced["ledger"],
                 "updated_at": self._now(),
@@ -348,43 +352,31 @@ class BankDemoRuntime:
                 f"bank-{suffix}-transfer",
                 "TRANSFER_REQUESTED",
                 payload={**common, "demo_run_start": not repaired},
+                route=str(reproduced["route"]),
             ))
             if repaired:
                 await self._emit("event", self._bank_event(
                     f"bank-{suffix}-ack",
                     "ACK_RECEIVED",
                     payload=common,
-                    service="payment-router",
-                ))
-                await self._emit("event", self._bank_event(
-                    f"bank-{suffix}-credit",
-                    "CREDIT_ACCEPTED",
-                    payload=common,
-                    service="destination-bank-bank_x",
+                    service="gateway_b",
+                    route="gateway_b.bank_x",
                 ))
             else:
                 await self._emit("event", self._bank_event(
                     f"bank-{suffix}-timeout",
                     "ACK_TIMEOUT",
                     payload=common,
-                    service="payment-router",
-                ))
-                await self._emit("event", self._bank_event(
-                    f"bank-{suffix}-retry",
-                    "RETRY_LOOP",
-                    payload={**common, "attempt": 2},
-                    service="transfer-ui",
-                ))
-                await self._emit("event", self._bank_event(
-                    f"bank-{suffix}-credit",
-                    "CREDIT_ACCEPTED",
-                    payload=common,
-                    service="destination-bank-bank_x",
+                    service="gateway_a",
                 ))
                 await self._emit("event", self._bank_event(
                     f"bank-{suffix}-duplicate",
                     "DUPLICATE_DEBIT_POSTED",
-                    payload={**common, "debit_count": reproduced["debits"]},
+                    payload={
+                        **common,
+                        "debit_count": reproduced["debits"],
+                        "failed_gateway": "gateway_a",
+                    },
                     service="core-banking",
                 ))
             return copy.deepcopy(self._state)
@@ -398,9 +390,10 @@ class BankDemoRuntime:
                 "incident": {
                     "id": "INC-BANK-001",
                     "area": "Outbound transfers",
-                    "title": "One transfer created two account debits",
+                    "title": "Gateway A outage duplicated Bank X debits",
                     "complaint": complaint,
                     "reported_by": "Amara Okafor",
+                    "complaint_count": 4,
                     "severity": "High",
                     "created_at": self._now(),
                 },
@@ -408,23 +401,51 @@ class BankDemoRuntime:
             })
             self._complete_step(
                 "report",
-                "Customer reported two debits after one timed-out transfer.",
+                "Four customers reported duplicate debits on timed-out Bank X transfers.",
             )
             intent_id = str(self._state["transfer"]["intent_id"])
             suffix = intent_id.rsplit("-", 1)[-1]
-            await self._emit("complaint", {
-                "id": f"complaint-{suffix}",
-                "ts": self._now(),
-                "channel": "in_app",
-                "raw_text": complaint,
-                "customer_token": "cust-demo-amara",
-                "parsed": {
-                    "type": "duplicate_debit",
-                    "amount": self._state["transfer"]["amount_ngn"],
-                    "product": "outbound_transfer",
-                    "matched_txn": intent_id,
-                },
-            })
+            complaints = [
+                (f"complaint-{suffix}", "cust-demo-amara", complaint, 25_000, intent_id, "in_app"),
+                (
+                    f"complaint-{suffix}-02",
+                    "cust-demo-chidi",
+                    "I sent money to my friend. It failed, but my account was charged twice.",
+                    18_500,
+                    f"intent-bank-x-{suffix}-02",
+                    "support_ticket",
+                ),
+                (
+                    f"complaint-{suffix}-03",
+                    "cust-demo-zainab",
+                    "The transfer timed out and I can see two debits for the same payment.",
+                    40_000,
+                    f"intent-bank-x-{suffix}-03",
+                    "whatsapp",
+                ),
+                (
+                    f"complaint-{suffix}-04",
+                    "cust-demo-kunle",
+                    "I sent money to my friend once and was debited two times.",
+                    12_000,
+                    f"intent-bank-x-{suffix}-04",
+                    "in_app",
+                ),
+            ]
+            for complaint_id, customer, text, amount, matched_txn, channel in complaints:
+                await self._emit("complaint", {
+                    "id": complaint_id,
+                    "ts": self._now(),
+                    "channel": channel,
+                    "raw_text": text,
+                    "customer_token": customer,
+                    "parsed": {
+                        "type": "duplicate_debit",
+                        "amount": amount,
+                        "product": "outbound_transfer",
+                        "matched_txn": matched_txn,
+                    },
+                })
             await self._emit("incident", self._incident_payload("emerging"))
             self._task = asyncio.create_task(self._repair(), name="avera-bank-demo-repair")
             return copy.deepcopy(self._state)
@@ -434,7 +455,7 @@ class BankDemoRuntime:
         await self.reset()
         await self.transfer()
         return await self.report_issue(
-            "I made one ₦25,000 transfer, but my account was debited twice after it timed out."
+            "I sent money to my friend, it did not go through, and I was debited twice."
         )
 
     async def start_repair(self) -> dict[str, object]:
@@ -491,12 +512,13 @@ class BankDemoRuntime:
     async def _proposal(self, source: str) -> tuple[RepairProposal, str]:
         instructions = (
             "You are repairing one isolated Python source file for a simulated bank. "
-            "The customer initiated one transfer. A provider acknowledgement timed out, "
-            "then attempt 2 created a second debit because the idempotency key changed. "
+            "Gateway A is unhealthy, but Bank X traffic remains pinned to it. The timeout "
+            "path replays transfers and produces duplicate debits for several customers. "
             "Return the full replacement module without Markdown fences. Keep exactly one "
-            "function named build_idempotency_key(transfer_intent_id, attempt), preserve "
-            "the two ValueError guards, use no imports or external calls, and make retries "
-            "share the original transfer-intent key while different intents remain unique."
+            "function named select_gateway(destination_bank, gateway_a_healthy), preserve "
+            "the two ValueError guards, use no imports or external calls, keep healthy "
+            "Gateway A traffic unchanged, and route Bank X to gateway_b.bank_x when "
+            "Gateway A is unhealthy."
         )
         context = {
             "complaint": self._state["incident"]["complaint"],
@@ -504,25 +526,29 @@ class BankDemoRuntime:
             "source_file": self.workspace.display_source_path,
             "current_source": source,
             "required_regressions": [
-                "same intent attempts 1 and 2 return the same key",
-                "different intents return different keys",
-                "invalid intent and attempt values raise ValueError",
+                "unhealthy Gateway A routes Bank X to Gateway B",
+                "healthy Gateway A remains the Bank X route",
+                "empty and unsupported destinations raise ValueError",
             ],
         }
         try:
-            proposal = await structured_call(
-                self.language_model,
-                instructions,
-                context,
-                RepairProposal,
-                validate=lambda value: self._validate_proposal(value),
+            proposal = await asyncio.wait_for(
+                structured_call(
+                    self.language_model,
+                    instructions,
+                    context,
+                    RepairProposal,
+                    validate=lambda value: self._validate_proposal(value),
+                ),
+                timeout=self.model_timeout,
             )
             return proposal, "gpt"
-        except ModelUnavailable:
+        except (ModelUnavailable, TimeoutError):
             return RepairProposal(
                 root_cause=(
-                    "The retry path included the attempt number in the provider idempotency key, "
-                    "so the second delivery was processed as a new transfer intent."
+                    "Bank X remained pinned to Gateway A after its health check failed. The "
+                    "timeout path replayed each transfer against the unavailable route after "
+                    "the ledger debit, producing a second debit for affected customers."
                 ),
                 replacement_source=SAFE_SOURCE,
             ), "verified fallback"
@@ -543,18 +569,18 @@ class BankDemoRuntime:
                 raise RuntimeError("the duplicate debit could not be reproduced")
             self._complete_step(
                 "investigate",
-                "One transfer intent produced two provider keys and two ledger debits.",
+                "Four complaints share the failed Gateway A → Bank X route; replay produced two debits.",
             )
             intent_id = str(self._state["transfer"]["intent_id"])
             suffix = intent_id.rsplit("-", 1)[-1]
             hypothesis_id = f"hyp-bank-{suffix}"
             await self._emit("hypothesis", {
                 "id": hypothesis_id,
-                "claim": "The transfer retry changes its idempotency key and posts a second debit.",
-                "zone": "transfer_idempotency",
+                "claim": "Bank X is still routed through failed Gateway A, so timeout replay posts a second debit.",
+                "zone": "gateway_a",
                 "evidence_for": [f"bank-{suffix}-timeout", f"bank-{suffix}-duplicate"],
                 "evidence_against": [],
-                "disproof": "Two attempts for one transfer intent must produce one provider key and one debit.",
+                "disproof": "With Gateway A unhealthy, Bank X must route through Gateway B and produce one debit.",
                 "routed_to": ["ghost_test_agent"],
                 "prior_rank": 1,
             })
@@ -564,7 +590,7 @@ class BankDemoRuntime:
                 detail={"transfer_intent_id": intent_id, "attempts": 2, "debits": 2},
             )
 
-            self._set_step("diagnose", "active", "Reading the retry and idempotency source.")
+            self._set_step("diagnose", "active", "Reading the Bank X gateway routing source.")
             proposal, repair_source = await self._proposal(before)
             await self._pause()
             self._complete_step("diagnose", proposal.root_cause)
@@ -572,13 +598,13 @@ class BankDemoRuntime:
                 "id": f"test-bank-{suffix}",
                 "hypothesis_id": hypothesis_id,
                 "purpose": "hypothesis_validation",
-                "test_plan": "Replay one transfer intent through the acknowledgement timeout and retry path.",
+                "test_plan": "Replay affected Bank X transfers with Gateway A marked unhealthy.",
                 "runs": 3,
                 "reproduced": 3,
                 "trace": [
-                    {"service": "transfer-service", "result": "attempt_1_debited", "latency_ms": 38},
-                    {"service": "payment-router", "result": "ack_timeout", "latency_ms": 1_200, "error_code": "ACK_TIMEOUT"},
-                    {"service": "transfer-service", "result": "attempt_2_debited", "latency_ms": 41},
+                    {"service": "gateway_a", "result": "health_check_failed", "latency_ms": 1_200, "error_code": "GATEWAY_UNAVAILABLE"},
+                    {"service": "payment-router", "result": "bank_x_route_remained_gateway_a", "latency_ms": 41},
+                    {"service": "core-banking", "result": "timeout_replay_debited_twice", "latency_ms": 38},
                 ],
                 "confidence": 0.99,
                 "verdict": "validated",
@@ -587,30 +613,35 @@ class BankDemoRuntime:
             await self._emit("incident", self._incident_payload("validated"))
             await self._emit("blast_radius", {
                 "id": f"blast-bank-{suffix}",
-                "txn_count": 2,
-                "customer_count": 1,
+                "txn_count": 8,
+                "customer_count": 4,
                 "silent_count": 0,
-                "exposure_ngn": self._state["transfer"]["amount_ngn"],
-                "customers": ["cust-demo-amara"],
+                "exposure_ngn": 95_500,
+                "customers": [
+                    "cust-demo-amara",
+                    "cust-demo-chidi",
+                    "cust-demo-zainab",
+                    "cust-demo-kunle",
+                ],
                 "customers_complete": True,
             })
             await self._emit("fix_plan", {
                 "id": f"plan-bank-{suffix}",
                 "steps": [
                     {
-                        "title": "Patch transfer idempotency",
-                        "description": "Keep one provider key for every retry of the original transfer intent.",
+                        "title": "Fail Bank X over to Gateway B",
+                        "description": "Use the healthy route whenever Gateway A's health check is down.",
                         "owner": "resolution_agent",
                     },
                     {
-                        "title": "Run transfer regression tests",
-                        "description": "Prove retries cannot create a second debit and different intents stay unique.",
+                        "title": "Run gateway routing regression tests",
+                        "description": "Prove failed Gateway A traffic moves to Gateway B and healthy routing stays stable.",
                         "owner": "ghost_test_agent",
                     },
                 ],
                 "owners": ["resolution_agent", "ghost_test_agent"],
                 "rollback": "Restore the isolated source snapshot if any regression fails.",
-                "verification": "Repeat the timed-out transfer journey and observe one debit.",
+                "verification": "Replay a Bank X transfer during the Gateway A outage and observe Gateway B with one debit.",
                 "eta_containment": "under 1 minute",
                 "eta_full": "under 2 minutes",
             })
@@ -631,7 +662,7 @@ class BankDemoRuntime:
             await self._pause()
             self._complete_step(
                 "patch",
-                "The retry now keeps one key for the original customer transfer intent.",
+                "Bank X now fails over to Gateway B whenever Gateway A is unhealthy.",
             )
             await self._emit_resolution(
                 "apply_bank_transfer_patch",
@@ -639,7 +670,7 @@ class BankDemoRuntime:
                 detail={"file": self.workspace.display_source_path, "repair_source": repair_source},
             )
 
-            self._set_step("test", "active", "Running the isolated transfer regression suite.")
+            self._set_step("test", "active", "Running the isolated gateway routing regression suite.")
             test_run = await asyncio.to_thread(self.workspace.run_tests)
             if not test_run.passed:
                 raise RuntimeError(f"regression suite failed: {test_run.output[-500:]}")
@@ -652,19 +683,24 @@ class BankDemoRuntime:
                 verified=True,
             )
 
-            self._set_step("verify", "active", "Repeating the original timeout and retry journey.")
+            self._set_step("verify", "active", "Repeating the Bank X journey with Gateway A unavailable.")
             verified = self._simulate_transfer(self._state["transfer"]["intent_id"])
-            if verified["debits"] != 1:
-                raise RuntimeError("verification still produced more than one debit")
+            if verified["debits"] != 1 or verified["route"] != "gateway_b.bank_x":
+                raise RuntimeError("verification did not fail Bank X over to Gateway B with one debit")
             await self._pause()
             self._complete_step(
                 "verify",
-                "Two delivery attempts produced one debit for the original transfer intent.",
+                "Gateway A stayed isolated; Bank X used Gateway B and produced one debit.",
             )
             await self._emit_resolution(
                 "verify_bank_transfer_journey",
                 "verified_pass",
-                detail={"transfer_intents": 1, "delivery_attempts": 2, "debits": 1},
+                detail={
+                    "transfer_intents": 1,
+                    "failed_route": "gateway_a.bank_x",
+                    "verified_route": "gateway_b.bank_x",
+                    "debits": 1,
+                },
                 verified=True,
             )
 
@@ -715,7 +751,7 @@ class BankDemoRuntime:
                     "test_command": test_run.command,
                     "tests_passed": 3,
                     "test_output": test_run.output,
-                    "verification": "1 transfer intent · 2 delivery attempts · 1 debit",
+                    "verification": "Gateway A failed · Bank X rerouted to Gateway B · 1 debit",
                     "repair_source": repair_source,
                 },
                 "updated_at": self._now(),
