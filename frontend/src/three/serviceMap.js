@@ -42,7 +42,7 @@ const TWIN_LIFT = 8;
 const PARTICLE_COUNT = 150;
 const CROWD = { spacing: 0.34, figure: 0.68, rightEdge: -18.4 };
 
-// Plain concentric rings of seats around the epicentre, filled from the centre outward.
+// The rings essentially. was really just math and trial and error.
 function ringSeats(count, spacing) {
   const seats = [{ x: 0, z: 0, r: 0 }];
   for (let ring = 1; seats.length < count; ring += 1) {

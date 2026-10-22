@@ -1,6 +1,6 @@
 // Folds the ordered /stream records into the view model the command centre renders.
 // The model keeps the same shape as fixtures.js, so every view works on live or recorded data.
-
+//Lowkey the toughest task here.
 import { fixture } from './fixtures.js';
 import { humanize } from './prose.js';
 

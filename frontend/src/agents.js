@@ -1,5 +1,4 @@
-// The four Avera agents narrate their work. Every line is computed from the live view model
-// (or the recorded fixture offline), so the agents only ever describe work that happened.
+// The four Avera agents, looping and answering, we need the agents comunicating. Let's go!
 
 import { claimParts } from './prose.js';
 import { naira } from './live.js';

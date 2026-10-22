@@ -1,6 +1,5 @@
 // Client for the Avera API (see backend/avera/API_CONTRACT.md).
-// API traffic stays same-origin and is forwarded by Vite in development and by
-// the Vercel rewrite in production. This avoids exposing the backend to browser CORS.
+// API traffic stays same-origin and is forwarded by Vite in development and by proxy...
 const BASE = '/api';
 
 export class ApiError extends Error {
