@@ -13,6 +13,7 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 | POST | `/twin/simulate` | Simulate a route or configuration change in the isolated twin | Blast Radius Agent |
 | POST | `/demo/start` | Start or replay the demo | Incident Command Centre |
 | POST | `/demo/inject` | Inject the deterministic failure and decoy | Incident Command Centre |
+| POST | `/demo/run` | Start a fresh baseline, inject the failure, and begin investigation in one request | Incident Command Centre |
 | POST | `/demo/reset` | Reset the simulated bank to its known baseline | Incident Command Centre |
 | GET | `/remediation/{incident_id}` | Read the simulated incident plan, blast radius, approval IDs, and resolution timeline | Incident Command Centre |
 | GET | `/approvals` | List pending/final simulated approvals | Approver UI |
@@ -41,7 +42,7 @@ The following routes are the shared interface from `private/Avera_Work_Split.pdf
 - SMS, code, and reconciliation decisions are recorded in-platform. The MVP uses simulated gateways and does not connect to external SMS, source-control, bank, or reconciliation systems.
 - Existing-platform connection buttons are integration entry points for the UI; this backend records decisions internally and does not yet authenticate to, send to, or execute actions in external platforms.
 - The Vite development server proxies `/api/*` to FastAPI and strips the `/api` prefix, including for `/api/stream` SSE. Browser development uses same-origin proxying rather than permissive backend CORS.
-- `POST /demo/start` and `/demo/reset` generate a 30-transfer healthy baseline. `/demo/inject` generates the default 1,284-transfer Bank X incident (thousands of streamed synthetic events) and is idempotent until the next reset. Counts can be adjusted within request bounds for smaller tests.
+- `POST /demo/start` and `/demo/reset` generate a 30-transfer healthy baseline. `/demo/inject` adds the default 1,284-transfer Bank X incident to a started baseline and is idempotent until the next reset. `/demo/run` performs both operations as one repeatable command, even after a completed scenario. Counts can be adjusted within request bounds for smaller tests.
 - Reset advances the simulator event-time epoch so repeated demo runs retain unique stream deduplication keys.
 
 ## Observability integration (Shaz)
@@ -52,7 +53,7 @@ and Hypothesis outputs, and actual Ghost Test feedback.
 `POST /observability/replay?until=<timezone-aware ISO timestamp>` investigates only
 allowlisted fixture observations at or before that cutoff. The fixture lacks
 healthy comparator activity, so evidence-only replay reports insufficient evidence.
-`POST /demo/inject` schedules investigation automatically; the worker coalesces
+`POST /demo/inject` and `POST /demo/run` schedule investigation automatically; the worker coalesces
 new arrivals while a model run is active. A validated Ghost Test result is
 handed to remediation only after its exact observed route, destination, error,
 and transfer evidence agree. Remediation publishes fix plan, blast radius,

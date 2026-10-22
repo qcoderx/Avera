@@ -7,6 +7,33 @@ from fastapi.testclient import TestClient
 from avera.api.app import create_app
 
 
+def test_demo_run_starts_and_injects_a_fresh_failure_in_one_request(monkeypatch) -> None:
+    monkeypatch.delenv("AVERA_GHOST_SUMMARY_MODEL", raising=False)
+    monkeypatch.delenv("AVERA_OBSERVABILITY_MODEL", raising=False)
+    request = {
+        "transactions": 16,
+        "customers": 12,
+        "complaint_count": 2,
+        "retry_customers": 2,
+        "history_refresh_customers": 3,
+        "channel_switch_customers": 2,
+    }
+
+    with TestClient(create_app()) as client:
+        for _ in range(2):
+            response = client.post("/demo/run", json=request)
+            assert response.status_code == 200
+            receipt = response.json()
+            assert receipt["fresh_run"] is True
+            assert receipt["baseline_transfers"] == 30
+            assert receipt["status"] == "injected"
+            assert receipt["transactions"] == 16
+            assert receipt["customers"] == 12
+            assert receipt["fault_gateway"] == "gateway_b"
+            assert receipt["destination_bank"] == "BANK_X"
+            assert receipt["simulated_only"] is True
+
+
 def test_demo_cycles_keep_route_mutations_behind_platform_approvals(monkeypatch) -> None:
     monkeypatch.delenv("AVERA_GHOST_SUMMARY_MODEL", raising=False)
     monkeypatch.delenv("AVERA_OBSERVABILITY_MODEL", raising=False)

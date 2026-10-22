@@ -461,7 +461,7 @@ function mapView() {
   const map = mapState();
   const insight = map.insight;
   const last = D.demoSteps.length - 1;
-  const playLabel = isLive() ? 'Run the live incident' : state.playing ? 'Pause story' : 'Play story';
+  const playLabel = isLive() ? 'Inject a fresh simulated failure' : state.playing ? 'Pause story' : 'Play story';
   return `
     <h1 class="visually-hidden">Service map</h1>
     <section class="map-stage ${has3d ? '' : 'flat'}" data-reveal>
@@ -481,7 +481,7 @@ function mapView() {
         <aside class="stage-node ${state.selectedNode ? 'open' : ''}" aria-live="polite">${nodeCard()}</aside>
       </div>
       <div class="stage-bottom">
-        <button class="stage-play" ${isLive() ? 'data-live="run"' : 'data-action="play"'} aria-label="${playLabel}" title="${playLabel}" ${state.busy ? 'disabled' : ''}>${icon(!isLive() && state.playing ? 'pause' : 'play', 18)}</button>
+        <button class="stage-play ${isLive() ? 'stage-inject' : ''}" ${isLive() ? 'data-live="run"' : 'data-action="play"'} aria-label="${playLabel}" title="${playLabel}" ${state.busy ? 'disabled' : ''}>${icon(isLive() ? 'spark' : state.playing ? 'pause' : 'play', 18)}${isLive() ? `<span>${state.busy === 'run' ? 'Injecting…' : 'Inject failure'}</span>` : ''}</button>
         <ol class="stage-timeline ${isLive() ? 'live' : ''}" style="--progress:${currentStep() / last}">${D.demoSteps.map((item, index) => `<li><button class="${index < currentStep() ? 'done' : ''} ${index === currentStep() ? 'current' : ''}" ${isLive() ? 'disabled' : `data-step="${index}"`}><time>${item.time}</time><span>${item.label}</span></button></li>`).join('')}</ol>
         ${has3d ? `<div class="map-controls"><button data-map-action="focus">${icon('focus', 16)} Zoom to suspect</button><button data-map-action="reset">${icon('reset', 16)} Reset view</button>${fullscreenButton()}</div>` : ''}
         ${mapLegend()}
@@ -989,7 +989,12 @@ async function runBusy(key, task, describeError = (error) => error.message) {
   }
 }
 
-const wait = (ms) => new Promise((resolve) => { window.setTimeout(resolve, ms); });
+async function injectFreshFailure() {
+  store.reset();
+  state.remediation = null;
+  const receipt = await api.demoRun();
+  showToast(`Failure injected: ${formatNumber(receipt.transactions)} transfers to ${pretty(receipt.destination_bank)} through ${pretty(receipt.fault_gateway)}. Avera is investigating.`);
+}
 
 async function liveAction(action, target) {
   const actions = {
@@ -999,8 +1004,7 @@ async function liveAction(action, target) {
       showToast(`Healthy baseline started: ${formatNumber(receipt.baseline_transfers)} transfers, Bank X via ${pretty(receipt.bank_x_route)}.`);
     },
     inject: async () => {
-      const receipt = await api.demoInject();
-      showToast(`Failure injected: ${formatNumber(receipt.transactions)} transfers to ${pretty(receipt.destination_bank)} through ${pretty(receipt.fault_gateway)}.`);
+      await injectFreshFailure();
     },
     reset: async () => {
       store.reset();
@@ -1009,18 +1013,7 @@ async function liveAction(action, target) {
       showToast('Simulated bank reset to its baseline.');
     },
     run: async () => {
-      if (store.step() === 6 || !store.run.started) {
-        store.reset();
-        state.remediation = null;
-        await api.demoStart();
-        await wait(1200);
-      }
-      if (!store.run.firstFailureTs) {
-        const receipt = await api.demoInject();
-        showToast(`Failure injected silently: ${formatNumber(receipt.transactions)} Bank X transfers. Watch Avera respond.`);
-      } else {
-        showToast('An incident is already in progress.', 'bad');
-      }
+      await injectFreshFailure();
     },
     investigate: async () => {
       const result = await api.investigate();
