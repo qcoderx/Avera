@@ -99,7 +99,8 @@ Without PostgreSQL or Kafka configuration, the backend uses in-memory adapters. 
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /demo/start`, `/demo/inject`, `/demo/reset` | Drive the healthy baseline, synthetic failure, or clean demo state. |
+| `POST /demo/run` | Start a fresh baseline, inject the synthetic failure, and begin investigation in one request. |
+| `POST /demo/start`, `/demo/inject`, `/demo/reset` | Control the baseline and failure stages separately. |
 | `POST /ingest/{source}` | Accept typed external-source events. |
 | `POST /hypotheses` | Submit hypotheses for deterministic Ghost Test evaluation. |
 | `POST /twin/simulate` | Evaluate a candidate route in the isolated twin. |

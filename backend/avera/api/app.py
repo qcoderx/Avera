@@ -571,6 +571,19 @@ def create_app(
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @app.post("/demo/run")
+    async def demo_run(body: DemoInjectRequest | None = None) -> dict[str, object]:
+        """Start a fresh baseline and inject one deterministic incident."""
+
+        baseline = await demo_start()
+        receipt = await control_plane.inject_demo(body or DemoInjectRequest())
+        schedule_investigation()
+        return {
+            **receipt,
+            "baseline_transfers": baseline["baseline_transfers"],
+            "fresh_run": True,
+        }
+
     @app.post("/demo/reset")
     async def demo_reset() -> dict[str, object]:
         await stop_investigation()

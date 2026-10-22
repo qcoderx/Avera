@@ -59,6 +59,7 @@ export const api = {
   replayFixture: () => request('/replay', { method: 'POST' }),
   demoStart: () => request('/demo/start', { method: 'POST', timeout: 60000 }),
   demoInject: (options = {}) => request('/demo/inject', { method: 'POST', body: options, timeout: 90000 }),
+  demoRun: (options = {}) => request('/demo/run', { method: 'POST', body: options, timeout: 90000 }),
   demoReset: () => request('/demo/reset', { method: 'POST', timeout: 60000 }),
   submitHypotheses: (hypotheses, runs = 5) => request('/hypotheses', { method: 'POST', body: { hypotheses, runs }, timeout: 60000 }),
   rerunGhostTest: (hypothesisId, runs = 5) => request('/ghost-test/rerun', { method: 'POST', body: { hypothesis_id: hypothesisId, runs }, timeout: 60000 }),
