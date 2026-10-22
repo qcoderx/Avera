@@ -28,7 +28,7 @@ export const fixture = {
     { id: 'observability', name: 'Observability', role: 'Signal fusion', color: '#1EA896', status: 'result', state: 'Incident fingerprinted', detail: '2,407 signals fused' },
     { id: 'ghost', name: 'Ghost Test', role: 'Safe validation', color: '#8178D8', status: 'result', state: 'H1 validated', detail: '15 tests complete' },
     { id: 'blast', name: 'Blast Radius', role: 'Impact planning', color: '#F2A65A', status: 'working', state: 'Finding silent impact', detail: '1,096 found' },
-    { id: 'resolution', name: 'Resolution', role: 'Approved action', color: '#FF715B', status: 'listening', state: 'Waiting for approval', detail: '2 decisions pending' },
+    { id: 'resolution', name: 'Resolution', role: 'Approved action', color: '#FF715B', status: 'listening', state: 'Escalated to the humans', detail: '2 decisions pending' },
   ],
   signals: [
     { time: '10:44:08', channel: 'Support', text: 'Three customers report hanging transfers', tone: 'coral' },
@@ -247,7 +247,7 @@ export const fixture = {
     { label: 'Detection', time: '10:51', title: 'Emerging incident detected', phase: 'working' },
     { label: 'Validation', time: '10:55', title: 'Testing competing hypotheses', phase: 'working' },
     { label: 'Impact', time: '10:57', title: 'Customer impact confirmed', phase: 'result' },
-    { label: 'Approval', time: '10:58', title: 'Resolution awaiting approval', phase: 'result' },
+    { label: 'Approval', time: '10:58', title: 'Resolution escalated to the humans', phase: 'result' },
     { label: 'Resolved', time: '11:03', title: 'Service restored and verified', phase: 'result' },
   ],
 };

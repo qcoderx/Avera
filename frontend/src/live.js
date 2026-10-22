@@ -437,7 +437,7 @@ export function viewModel(store, routes, displayStep) {
     { ...base.agents[0], status: step >= 2 ? 'result' : 'listening', state: run.incident ? 'Incident fingerprinted' : 'Listening to signals', detail: `${run.eventCount.toLocaleString('en-NG')} signals fused` },
     { ...base.agents[1], status: step === 3 ? 'working' : validatedTest ? 'result' : 'listening', state: validatedTest ? `${label.get(validatedTest.hypothesis.id)} validated` : run.tests.size ? 'Testing hypotheses' : 'Waiting for hypotheses', detail: `${run.tests.size} tests complete` },
     { ...base.agents[2], status: blast ? 'result' : step >= 3 ? 'working' : 'listening', state: blast ? 'Impact found' : 'Waiting for a validated cause', detail: blast ? `${affected.toLocaleString('en-NG')} found` : '—' },
-    { ...base.agents[3], status: resolved ? 'result' : 'listening', state: resolved ? 'Incident resolved' : pending.length ? 'Waiting for approval' : 'Standing by', detail: `${pending.length} decision${pending.length === 1 ? '' : 's'} pending` },
+    { ...base.agents[3], status: resolved ? 'result' : 'listening', state: resolved ? 'Incident resolved' : pending.length ? 'Escalated to the humans' : 'Standing by', detail: `${pending.length} decision${pending.length === 1 ? '' : 's'} pending` },
   ];
 
   const signals = run.feed.slice(-7).map((item) => ({ time: clock(item.ts), channel: item.channel, text: item.text, tone: item.tone }));

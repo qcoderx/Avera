@@ -865,7 +865,7 @@ function drawApprovalPrompt() {
     <section class="approval-prompt" role="alertdialog" aria-labelledby="approval-prompt-title" aria-describedby="approval-prompt-reason">
       <img src="/assets/agents/resolution/agent-listen-a.png" alt=""/>
       <div class="prompt-body">
-        <span class="prompt-agent"><i></i>Resolution · Waiting for approval</span>
+        <span class="prompt-agent"><i></i>Resolution · Escalated to the humans</span>
         <h2 id="approval-prompt-title">${item.title}</h2>
         <p id="approval-prompt-reason">${reason}</p>
         <small>Only ${item.owner} can approve this. Nothing changes in production until you do.${session ? ` Signed in as ${session.sub}.` : ''}</small>

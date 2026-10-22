@@ -125,15 +125,15 @@ export function agentStatuses(D, step, ctx) {
     ] };
   }
 
-  // Resolution: plans, waits for humans, applies, verifies.
+  // Resolution: plans, escalates to the humans, applies, verifies.
   if (step < 4) {
     status.resolution = { mode: 'idle', headline: 'Waiting', lines: ['Waiting for a validated cause and impact before planning a fix.'] };
   } else if (step === 4) {
     status.resolution = { mode: 'listening', headline: 'Planning', lines: [`Preparing containment, patch and reconciliation steps${f.plan ? ` (containment ${f.plan.containmentEta})` : ''}.`] };
   } else if (step === 5) {
     const next = f.pending.find((item) => item.kind === 'Routing change') || f.pending[0];
-    status.resolution = { mode: 'waiting', headline: 'Waiting for approval', lines: [
-      next ? `Waiting for approval: ${next.title}. Only ${next.owner} can approve this.` : 'Waiting for approval from an authorised engineer.',
+    status.resolution = { mode: 'waiting', headline: 'Escalated to the humans', lines: [
+      next ? `Escalated to the humans: ${next.title}. Only ${next.owner} can approve this.` : 'Escalated to the humans: an authorised engineer must approve.',
       `${f.pending.length} decision${f.pending.length === 1 ? '' : 's'} pending. Nothing changes in production until a human approves.`,
       f.plan?.simulationSuccess != null ? `The reroute passed ${f.plan.simulationSuccess}% of twin transfers. Ready when you are.` : 'The plan is ready in the Fix plan view.',
     ] };
@@ -163,7 +163,7 @@ const HANDOFFS = {
   2: [['observability', 'Opened an incident and fused the signals into one fingerprint. Writing competing hypotheses now.']],
   3: [['observability', 'Done investigating. Handing my hypotheses to Ghost Test.'], ['ghost', 'Got them. Testing each one in the digital twin with synthetic transfers.']],
   4: [['ghost', 'Validation finished. Handing the validated cause to Blast Radius.'], ['blast', 'On it. Searching every transaction for customers hit by this fingerprint.']],
-  5: [['blast', 'Impact mapped. Handing the plan to Resolution.'], ['resolution', 'Waiting for approval. I will not change anything in production until an engineer approves the reroute.']],
+  5: [['blast', 'Impact mapped. Handing the plan to Resolution.'], ['resolution', 'Escalated to the humans. I will not change anything in production until an engineer approves the reroute.']],
   6: [['resolution', 'Approval received. Reroute applied. Asking Ghost Test to verify.'], ['ghost', 'Rerun complete: the failure no longer reproduces.'],
     ['resolution', 'Done. Incident resolved. All four agents are standing down; ask any of us if you need something.']],
 };
