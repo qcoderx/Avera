@@ -1,4 +1,3 @@
-"""Validate language candidates against real evidence and allowed resolver ownership."""
 from typing import Literal
 from pydantic import Field, create_model
 from avera.contracts import ContractModel, Hypothesis
@@ -18,8 +17,7 @@ class Candidates(ContractModel):
 async def investigate(model, context, evidence, zones):
     if not evidence or not zones:
         raise ModelUnavailable("no_supported_components_or_evidence")
-    # Narrow existing contracts per investigation. The model cannot invent zone,
-    # resolver or evidence identifiers; shared output fields remain unchanged.
+
     references = Literal[tuple(sorted(evidence))]
     zone_names = Literal[tuple(sorted(zones))]
     tags = Literal[tuple(sorted({tag for config in zones.values() for tag in config["routed_to"]}))]

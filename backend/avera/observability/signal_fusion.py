@@ -1,4 +1,3 @@
-"""Event-time correlation; measurements remain deterministic and inspectable."""
 from collections import defaultdict
 
 FAILURES = {"ACK_TIMEOUT", "NO_CREDIT", "CREDIT_REJECTED"}
@@ -14,11 +13,11 @@ def correlate(events):
     groups = defaultdict(list)
     for txn, items in transactions.items():
         if len({e.customer_token for e in items if e.customer_token is not None}) > 1:
-            continue  # Conflicting customer identity cannot establish a transaction trace.
+            continue
         requests = [e for e in items if e.code == "TRANSFER_REQUESTED"]
         terminals = [e for e in items if e.code in TERMINALS]
         if not terminals:
-            continue  # An incomplete trace is unknown, not a failed payment.
+            continue
         terminal = terminals[-1]
         request = requests[0] if requests else None
         key = (terminal.route, terminal.service,

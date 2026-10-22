@@ -1,4 +1,3 @@
-"""Run Shaz's integration against the existing simulated bank and Ghost Test."""
 import argparse
 import asyncio
 import json
@@ -59,7 +58,7 @@ async def main(argv=None):
                       "source_observations": [v.model_dump(mode="json") for v in agent.items.values()]}
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
-        print(json.dumps({"scope": "Shaz observability only" if args.observability_only else "Shaz observability -> existing Ghost Test (synthetic data)",
+        print(json.dumps({"scope": "Observability only" if args.observability_only else "Observability -> existing Ghost Test (synthetic data)",
             "ghost_test_executed": agent.feedback is not None,
             "state": result["state"], "hypotheses": len(result["hypotheses"]), "errors": result["errors"],
             "verdicts": [{"zone": v.hypothesis.zone, "verdict": v.test_result.verdict.value}

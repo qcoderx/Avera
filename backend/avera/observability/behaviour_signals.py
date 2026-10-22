@@ -1,4 +1,3 @@
-"""Report observed behaviour, without inferring abandonment from silence."""
 from collections import defaultdict
 
 

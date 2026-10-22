@@ -1,4 +1,3 @@
-"""Bounded, validated model calls; errors expose codes, never provider bodies."""
 from __future__ import annotations
 
 import asyncio
@@ -44,12 +43,11 @@ def configured_model_name():
 
 
 def configured_base_url():
-    # An empty optional dotenv value must not turn SDK requests into relative URLs.
+
     return os.getenv("OPENAI_BASE_URL", "").strip() or "https://api.openai.com/v1"
 
 
 def configured_model():
-    # OpenAI is established by the existing project configuration, not key syntax.
     model = configured_model_name()
     key = os.getenv("OPENAI_API_KEY")
     if not model or not key:
@@ -87,16 +85,14 @@ async def structured_call(model, instructions, context, schema, validate=lambda 
                         "if it genuinely contradicts the claim. Otherwise return evidence_against as []."
                     )
                 if type(exc).__name__ == "CandidateValidationError":
-                    # Put deterministic validator feedback in the instruction channel as
-                    # well as the JSON context; structured-output models may treat context
-                    # fields as evidence rather than as a required correction.
+
                     request_instructions = (
                         f"{instructions}\n\nVALIDATION RETRY — correct the previous output.\n"
                         f"Validation code: {exc}. {request_context['correction']} "
                         "Return a complete corrected object that satisfies this correction."
                     )
             if attempt:
-                # Safe diagnostics: no exception text, request body, headers or key.
+
                 status = getattr(exc, "status_code", None)
                 suffix = f"_http_{status}" if isinstance(status, int) else ""
                 if type(exc).__name__ == "CandidateValidationError":

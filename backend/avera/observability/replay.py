@@ -1,4 +1,3 @@
-"""An allowlist boundary shared by live ingestion and chronological fixture replay."""
 from __future__ import annotations
 
 import json
@@ -18,7 +17,7 @@ EVENT_CODES = {"TRANSFER_REQUESTED", "DEBIT_POSTED", "INSUFFICIENT_FUNDS", "CRED
 
 def observation(kind, data):
     if str(kind) == "complaint":
-        # Never trust fixture pre-parsing as language interpretation.
+
         return Complaint.model_validate({**data, "parsed": None})
     if str(kind) != "event" or data.get("code") not in EVENT_CODES:
         return None
@@ -30,7 +29,6 @@ def observation(kind, data):
 
 
 def replay_observations(path: Path, until: datetime):
-    """Do not deserialize fixture contracts/labels/results into the investigator."""
     raw = json.loads(path.read_text(encoding="utf-8"))
     selected = []
     for record in raw["records"]:

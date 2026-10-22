@@ -1,4 +1,3 @@
-"""Observability owns investigation; Ghost Test owns all test verdicts and scores."""
 from __future__ import annotations
 
 import asyncio
@@ -80,8 +79,7 @@ class ObservabilityAgent:
                 "feedback": self.feedback.model_dump(mode="json") if self.feedback else None}
 
     async def run(self, *, until: datetime | None = None, handoff: bool = True):
-        # Source events may continue arriving while parsing/model/Ghost Test work awaits.
-        # Never publish a result prepared from an older input version as current.
+
         for _ in range(3):
             input_version = self.input_version
             result = await self._run_once(until=until, handoff=handoff)
@@ -121,8 +119,8 @@ class ObservabilityAgent:
             boundary = cutoff - self.window
             current = [e for e in events if e.ts >= boundary]
             baseline = [e for e in events if boundary - self.window <= e.ts < boundary]
-            # If the demo is shorter than a window, use only observed pre-failure
-            # terminals as the explicitly labelled cross-route comparator.
+
+
             failures = [e for e in current if e.code in {"ACK_TIMEOUT", "NO_CREDIT", "CREDIT_REJECTED"}]
             if not failures:
                 self.state = "healthy"
@@ -166,8 +164,7 @@ class ObservabilityAgent:
                        "inferences": self.incident.fingerprint, "allowed_zones": zones,
                        "unknowns": ["unobserved payment outcomes", "root cause pending controlled tests"],
                        "service_map": self.service_map(), "feedback": None}
-            # Bound model context deterministically while keeping each code/component,
-            # app version, route and customer report represented with real IDs.
+
             representatives = {}
             for e in events:
                 representatives.setdefault((e.service, e.route, e.code, e.payload.get("app_version")), e)
@@ -181,7 +178,6 @@ class ObservabilityAgent:
             return await self._complete(context, supplied, zones, handoff=handoff)
 
     async def _complete(self, context, supplied, zones, *, handoff, reuse=False):
-        """Stop at ranked hypotheses when requested; preserve integrated feedback handling."""
         for revision in range(self.max_revisions + 1):
             self.revisions = revision
             try:
@@ -191,7 +187,7 @@ class ObservabilityAgent:
                 self.state = "degraded"
                 self.errors = sorted(set(self.errors + [str(exc)]))
                 return self.snapshot()
-            # Namespace model IDs so previous demos/rounds cannot collide in ingestion.
+
             if not (reuse and revision == 0):
                 self.hypotheses = [h.model_copy(update={"id": f"{self.incident.id}-r{revision}-{i}"})
                                    for i, h in enumerate(self.hypotheses, 1)]

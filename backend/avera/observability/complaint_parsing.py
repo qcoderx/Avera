@@ -1,4 +1,3 @@
-"""Interpret reported facts; transaction identity remains a Python decision."""
 import re
 from decimal import Decimal
 from datetime import timedelta

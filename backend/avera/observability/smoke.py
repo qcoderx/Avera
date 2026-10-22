@@ -1,4 +1,3 @@
-"""One non-customer API request; only pass/fail is printed."""
 import asyncio
 import os
 from pathlib import Path
